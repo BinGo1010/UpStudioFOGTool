@@ -1,0 +1,3 @@
+netstat -ano | findstr 1399
+
+taskkill /PID 64044 /F

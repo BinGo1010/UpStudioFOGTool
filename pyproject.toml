@@ -1,0 +1,26 @@
+[project]
+name = "qt-test"
+version = "0.1.0"
+description = "EEG实验应用，支持实时数据接收、存储和波形显示"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pyqt6==6.9.1",
+    "pyqt6-qt6==6.9.1",
+    "pyqt6-sip==13.10.2",
+    "pyqtgraph>=0.13.7",
+    "numpy>=1.24.0",
+    "opencv-python>=4.13.0",
+    "pyrealsense2>=2.58.1",
+    "pyinstaller>=6.0",
+]
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "page1",
+    "page2",
+]
+
+[tool.setuptools.packages.find]
+include = []
