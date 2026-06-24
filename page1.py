@@ -1180,7 +1180,7 @@ class Page1Widget(QWidget):
     D435I_RGB_WIDGET_INDEX = USB_CAMERA_COUNT
     D435I_STEREO_WIDGET_INDEX = USB_CAMERA_COUNT + 1
     D435I_WIDGET_INDICES = (D435I_RGB_WIDGET_INDEX, D435I_STEREO_WIDGET_INDEX)
-    CAMERA_GRID_COLUMNS = 3
+    CAMERA_GRID_COLUMNS = 2
 
     REMOTE_DEVICE_INSTANCE_ID = r"BTHLE\DEV_2A0798DB3597\8&3E274D5&2&2A0798DB3597"
     REMOTE_ALLOWED_KEYS = (
@@ -1208,6 +1208,7 @@ class Page1Widget(QWidget):
         self.camera_selects: List[RefreshCameraComboBox] = []
         self.camera_labels: List[QLabel] = []
         self.camera_status_labels: List[QLabel] = []
+        self.video_refresh_buttons: List[QPushButton] = []
         self.imu_status_labels: List[QLabel] = []
         self.imu_command_select: Optional[QComboBox] = None
         self.imu_plot_widgets: List[OptimizedChannelPlot] = []
@@ -1360,34 +1361,25 @@ class Page1Widget(QWidget):
         camera_tab_layout = QVBoxLayout(camera_tab)
         camera_tab_layout.setContentsMargins(8, 8, 8, 8)
 
-        camera_group = QGroupBox("视频预览与连接状态")
-        camera_group_layout = QVBoxLayout(camera_group)
-        camera_top_row = QHBoxLayout()
-        camera_top_row.addStretch(1)
-        self.btn_refresh_video_devices = QPushButton("刷新视频设备")
-        self.btn_refresh_video_devices.clicked.connect(self.refresh_video_devices)
-        camera_top_row.addWidget(self.btn_refresh_video_devices)
-        camera_group_layout.addLayout(camera_top_row)
-        camera_grid = QGridLayout()
-        camera_titles = [
-            *(f"USB Camera {idx}" for idx in range(1, self.USB_CAMERA_COUNT + 1)),
-            "D435i RGB",
-            "D435i Stereo",
-        ]
-        for col in range(self.CAMERA_GRID_COLUMNS):
-            camera_grid.setColumnStretch(col, 1)
-        row_count = (len(camera_titles) + self.CAMERA_GRID_COLUMNS - 1) // self.CAMERA_GRID_COLUMNS
-        for row in range(row_count):
-            camera_grid.setRowStretch(row, 1)
-        for idx, camera_title in enumerate(camera_titles):
+        video_tabs = QtWidgets.QTabWidget()
+        video_tabs.setDocumentMode(True)
+
+        def prepare_camera_grid(grid: QGridLayout, panel_count: int):
+            for col in range(self.CAMERA_GRID_COLUMNS):
+                grid.setColumnStretch(col, 1)
+            row_count = (panel_count + self.CAMERA_GRID_COLUMNS - 1) // self.CAMERA_GRID_COLUMNS
+            for row in range(row_count):
+                grid.setRowStretch(row, 1)
+
+        def add_camera_panel(grid: QGridLayout, widget_index: int, camera_title: str, grid_index: int):
             box = QGroupBox(camera_title)
             box_layout = QVBoxLayout(box)
-            if idx < self.USB_CAMERA_COUNT:
+            if widget_index < self.USB_CAMERA_COUNT:
                 selector = RefreshCameraComboBox()
                 selector.setMinimumHeight(28)
                 selector.about_to_show.connect(self.refresh_camera_devices)
                 selector.currentIndexChanged.connect(
-                    lambda _index, camera_index=idx: self._on_usb_camera_selection_changed(camera_index)
+                    lambda _index, camera_index=widget_index: self._on_usb_camera_selection_changed(camera_index)
                 )
                 box_layout.addWidget(selector)
                 self.camera_selects.append(selector)
@@ -1412,9 +1404,49 @@ class Page1Widget(QWidget):
             self.video_widgets.append(video)
             self.camera_labels.append(label)
             self.camera_status_labels.append(status)
-            camera_grid.addWidget(box, idx // self.CAMERA_GRID_COLUMNS, idx % self.CAMERA_GRID_COLUMNS)
-        camera_group_layout.addLayout(camera_grid, 1)
-        camera_tab_layout.addWidget(camera_group)
+            grid.addWidget(box, grid_index // self.CAMERA_GRID_COLUMNS, grid_index % self.CAMERA_GRID_COLUMNS)
+
+        usb_camera_tab = QWidget()
+        usb_camera_layout = QVBoxLayout(usb_camera_tab)
+        usb_camera_layout.setContentsMargins(4, 4, 4, 4)
+        usb_refresh_row = QHBoxLayout()
+        usb_refresh_row.addStretch(1)
+        self.btn_refresh_usb_video_devices = QPushButton("刷新 USB 视频设备")
+        self.btn_refresh_usb_video_devices.clicked.connect(self.refresh_usb_video_devices)
+        usb_refresh_row.addWidget(self.btn_refresh_usb_video_devices)
+        usb_camera_layout.addLayout(usb_refresh_row)
+        self.video_refresh_buttons.append(self.btn_refresh_usb_video_devices)
+        usb_camera_grid = QGridLayout()
+        usb_camera_grid.setSpacing(8)
+        prepare_camera_grid(usb_camera_grid, self.USB_CAMERA_COUNT)
+        for idx in range(self.USB_CAMERA_COUNT):
+            add_camera_panel(usb_camera_grid, idx, f"USB Camera {idx + 1}", idx)
+        usb_camera_layout.addLayout(usb_camera_grid, 1)
+        video_tabs.addTab(usb_camera_tab, "USB Camera")
+
+        d435i_tab = QWidget()
+        d435i_layout = QVBoxLayout(d435i_tab)
+        d435i_layout.setContentsMargins(4, 4, 4, 4)
+        d435i_refresh_row = QHBoxLayout()
+        d435i_refresh_row.addStretch(1)
+        self.btn_refresh_d435i_video_devices = QPushButton("刷新 D435i 视频设备")
+        self.btn_refresh_d435i_video_devices.clicked.connect(self.refresh_d435i_video_devices)
+        d435i_refresh_row.addWidget(self.btn_refresh_d435i_video_devices)
+        d435i_layout.addLayout(d435i_refresh_row)
+        self.video_refresh_buttons.append(self.btn_refresh_d435i_video_devices)
+        d435i_grid = QGridLayout()
+        d435i_grid.setSpacing(8)
+        d435i_specs = [
+            (self.D435I_RGB_WIDGET_INDEX, "D435i RGB"),
+            (self.D435I_STEREO_WIDGET_INDEX, "D435i Stereo"),
+        ]
+        prepare_camera_grid(d435i_grid, len(d435i_specs))
+        for grid_index, (widget_index, title) in enumerate(d435i_specs):
+            add_camera_panel(d435i_grid, widget_index, title, grid_index)
+        d435i_layout.addLayout(d435i_grid, 1)
+        video_tabs.addTab(d435i_tab, "D435i")
+
+        camera_tab_layout.addWidget(video_tabs, 1)
         data_tabs.addTab(camera_tab, "视频预览")
         left_panel.addWidget(data_tabs, 1)
         main_row.addLayout(left_panel, 1)
@@ -2035,9 +2067,14 @@ class Page1Widget(QWidget):
             device = self._selected_usb_camera_device(idx)
             if device is None:
                 self.cameras.append(None)
-                self.camera_labels[idx].setText("未检测到设备")
-                self.camera_status_labels[idx].setText("状态: disconnected")
-                self.camera_status_labels[idx].setStyleSheet("color: #b00020;")
+                if self._usb_camera_channel_skipped(idx):
+                    self.camera_labels[idx].setText("不使用")
+                    self.camera_status_labels[idx].setText("状态: skipped")
+                    self.camera_status_labels[idx].setStyleSheet("color: #666;")
+                else:
+                    self.camera_labels[idx].setText("未检测到设备")
+                    self.camera_status_labels[idx].setText("状态: disconnected")
+                    self.camera_status_labels[idx].setStyleSheet("color: #b00020;")
                 continue
 
             camera = QCamera(device, self)
@@ -2065,6 +2102,7 @@ class Page1Widget(QWidget):
 
     def refresh_camera_devices(self):
         previous_ids = [self._combo_device_id(combo) for combo in self.camera_selects]
+        previous_texts = [combo.currentText().strip() for combo in self.camera_selects]
         self.available_usb_devices = [
             device for device in QMediaDevices.videoInputs()
             if not self._is_realsense_qt_camera(device.description())
@@ -2072,7 +2110,8 @@ class Page1Widget(QWidget):
 
         for idx, combo in enumerate(self.camera_selects):
             preferred_id = previous_ids[idx] if idx < len(previous_ids) else ""
-            if not preferred_id and idx < len(self.available_usb_devices):
+            explicit_skip = idx < len(previous_texts) and previous_texts[idx] == "不使用"
+            if not preferred_id and not explicit_skip and idx < len(self.available_usb_devices):
                 preferred_id = self._camera_device_id(self.available_usb_devices[idx])
 
             combo.blockSignals(True)
@@ -2080,13 +2119,20 @@ class Page1Widget(QWidget):
             if not self.available_usb_devices:
                 combo.addItem("未检测到 USB Camera", "")
                 combo.setEnabled(False)
+                combo.setProperty("explicit_skip", False)
             else:
                 combo.setEnabled(not self.recording)
                 combo.addItem("不使用", "")
                 for device in self.available_usb_devices:
                     combo.addItem(self._camera_device_label(device), self._camera_device_id(device))
+                if preferred_id and combo.findData(preferred_id) < 0:
+                    combo.addItem(f"已选择设备未检测到 ({preferred_id})", preferred_id)
                 selected_index = combo.findData(preferred_id)
                 combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+                combo.setProperty(
+                    "explicit_skip",
+                    not self._combo_device_id(combo) and combo.currentText().strip() == "不使用",
+                )
             combo.blockSignals(False)
 
     def _on_usb_camera_selection_changed(self, camera_index: int):
@@ -2106,6 +2152,26 @@ class Page1Widget(QWidget):
             if self._camera_device_id(device) == selected_id:
                 return device
         return None
+
+    def _usb_camera_channel_skipped(self, camera_index: int) -> bool:
+        if camera_index >= len(self.camera_selects):
+            return False
+        combo = self.camera_selects[camera_index]
+        return (
+            not self._combo_device_id(combo)
+            and combo.currentText().strip() == "不使用"
+            and bool(combo.property("explicit_skip"))
+        )
+
+    def _enabled_usb_camera_count(self) -> int:
+        count = 0
+        for idx in range(self.USB_CAMERA_COUNT):
+            camera = self.cameras[idx] if idx < len(self.cameras) else None
+            if camera is not None:
+                count += 1
+            elif not self._usb_camera_channel_skipped(idx):
+                count += 1
+        return count
 
     def _combo_device_id(self, combo: QComboBox) -> str:
         value = combo.currentData()
@@ -2258,6 +2324,26 @@ class Page1Widget(QWidget):
         self.setup_cameras()
         self.realsense.start_preview()
         self.log_message("Video devices refreshed.")
+
+    def refresh_usb_video_devices(self):
+        if self.recording:
+            QMessageBox.warning(self, "刷新 USB 视频设备", "当前正在采集，请先停止采集后再刷新 USB 视频设备。")
+            return
+        self.log_message("Refreshing USB video devices...")
+        self._stop_usb_cameras()
+        self.refresh_camera_devices()
+        self.setup_cameras()
+        self.log_message("USB video devices refreshed.")
+
+    def refresh_d435i_video_devices(self):
+        if self.recording:
+            QMessageBox.warning(self, "刷新 D435i 视频设备", "当前正在采集，请先停止采集后再刷新 D435i 视频设备。")
+            return
+        self.log_message("Refreshing D435i video devices...")
+        self.realsense.stop_preview()
+        self.realsense.start_preview()
+        self.log_message("D435i video devices refreshed.")
+
     def _selected_command_imu_index(self) -> int:
         if self.imu_command_select is None:
             return 1
@@ -2422,6 +2508,8 @@ class Page1Widget(QWidget):
 
         missing_cameras = []
         for idx in range(self.USB_CAMERA_COUNT):
+            if self._usb_camera_channel_skipped(idx):
+                continue
             camera = self.cameras[idx] if idx < len(self.cameras) else None
             if camera is None:
                 missing_cameras.append(f"Camera{idx + 1}")
@@ -2512,11 +2600,12 @@ class Page1Widget(QWidget):
         self.btn_stop.setEnabled(True)
         self.enable_d435i_checkbox.setEnabled(False)
         self.btn_record_baseline.setEnabled(False)
-        self.btn_refresh_video_devices.setEnabled(False)
+        for button in self.video_refresh_buttons:
+            button.setEnabled(False)
         self.task_type_combo.setEnabled(False)
         for combo in self.camera_selects:
             combo.setEnabled(False)
-        video_channel_count = self.USB_CAMERA_COUNT + (len(self.D435I_WIDGET_INDICES) if self._d435i_recording_enabled() else 0)
+        video_channel_count = self._enabled_usb_camera_count() + (len(self.D435I_WIDGET_INDICES) if self._d435i_recording_enabled() else 0)
         self.log_message(f"采集已开始：{self.task_type_combo.currentText()}，5 个 IMU 与 {video_channel_count} 路视频已进入同步记录。")
         self.log_message(f"会话：{os.path.basename(self.session_dir)}")
         self.log_message("等待遥控双击标记实验开始。")
@@ -2552,7 +2641,8 @@ class Page1Widget(QWidget):
         self.btn_stop.setEnabled(False)
         self.enable_d435i_checkbox.setEnabled(True)
         self.btn_record_baseline.setEnabled(True)
-        self.btn_refresh_video_devices.setEnabled(True)
+        for button in self.video_refresh_buttons:
+            button.setEnabled(True)
         self.task_type_combo.setEnabled(True)
         for spin in self.port_spins:
             spin.setEnabled(True)
@@ -2566,6 +2656,7 @@ class Page1Widget(QWidget):
             label = self.camera_labels[idx].text() if idx < len(self.camera_labels) else ""
             usb_cameras.append({
                 "index": idx + 1,
+                "enabled": not self._usb_camera_channel_skipped(idx),
                 "connected": camera is not None,
                 "label": label,
                 "file": f"camera{idx + 1}.mp4" if camera is not None else None,
@@ -2601,7 +2692,11 @@ class Page1Widget(QWidget):
                 "file": "session_sync.csv",
                 "timestamp_zero": "Relative timestamps use session_start_pc_timestamp.",
                 "required_devices": [
-                    *(f"camera{idx}" for idx in range(1, self.USB_CAMERA_COUNT + 1)),
+                    *(
+                        f"camera{idx + 1}"
+                        for idx in range(self.USB_CAMERA_COUNT)
+                        if not self._usb_camera_channel_skipped(idx)
+                    ),
                     *([] if not d435i_enabled else ["d435i"]),
                     "WT IMU 1-5",
                     "bluetooth_remote",

@@ -136,7 +136,7 @@ class LabelTimelineWidget(QWidget):
 
 
 class Page2Widget(QWidget):
-    VIDEO_GRID_COLUMNS = 3
+    VIDEO_GRID_COLUMNS = 2
     VIDEO_SPECS = [
         ("camera1", "Camera 1", "camera1.mp4", "camera1_record_requested"),
         ("camera2", "Camera 2", "camera2.mp4", "camera2_record_requested"),
@@ -179,7 +179,7 @@ class Page2Widget(QWidget):
         self.dir_input = QLineEdit(os.path.abspath("data"))
         self.btn_browse = QPushButton("选择保存目录")
         self.btn_browse.clicked.connect(self.choose_session_dir)
-        self.btn_load = QPushButton(f"加载{len(self.VIDEO_SPECS)}路视频")
+        self.btn_load = QPushButton("加载全部视频")
         self.btn_load.clicked.connect(lambda: self.load_session_videos())
         source_layout.addWidget(QLabel("会话目录"), 0, 0)
         source_layout.addWidget(self.dir_input, 0, 1)
@@ -188,18 +188,23 @@ class Page2Widget(QWidget):
         root.addWidget(source_group)
 
         middle = QHBoxLayout()
-        video_group = QGroupBox(f"{len(self.VIDEO_SPECS)}路视频同步标注")
+        video_group = QGroupBox("视频同步标注")
         video_layout = QVBoxLayout(video_group)
-        self.video_grid = QGridLayout()
-        self.video_grid.setSpacing(8)
-        for col in range(self.VIDEO_GRID_COLUMNS):
-            self.video_grid.setColumnStretch(col, 1)
-        row_count = (len(self.VIDEO_SPECS) + self.VIDEO_GRID_COLUMNS - 1) // self.VIDEO_GRID_COLUMNS
-        for row in range(row_count):
-            self.video_grid.setRowStretch(row, 1)
         self.video_labels: Dict[str, QLabel] = {}
         self.status_labels: Dict[str, QLabel] = {}
-        for index, (key, title, _rel_path, _event_name) in enumerate(self.VIDEO_SPECS):
+
+        video_tabs = QtWidgets.QTabWidget()
+        video_tabs.setDocumentMode(True)
+
+        def prepare_video_grid(grid: QGridLayout, panel_count: int):
+            for col in range(self.VIDEO_GRID_COLUMNS):
+                grid.setColumnStretch(col, 1)
+            row_count = (panel_count + self.VIDEO_GRID_COLUMNS - 1) // self.VIDEO_GRID_COLUMNS
+            for row in range(row_count):
+                grid.setRowStretch(row, 1)
+
+        def add_video_panel(grid: QGridLayout, spec: tuple, grid_index: int):
+            key, title, _rel_path, _event_name = spec
             panel = QGroupBox(title)
             panel_layout = QVBoxLayout(panel)
             video_label = QLabel("未加载")
@@ -212,8 +217,33 @@ class Page2Widget(QWidget):
             panel_layout.addWidget(status_label)
             self.video_labels[key] = video_label
             self.status_labels[key] = status_label
-            self.video_grid.addWidget(panel, index // self.VIDEO_GRID_COLUMNS, index % self.VIDEO_GRID_COLUMNS)
-        video_layout.addLayout(self.video_grid, 1)
+            grid.addWidget(panel, grid_index // self.VIDEO_GRID_COLUMNS, grid_index % self.VIDEO_GRID_COLUMNS)
+
+        usb_specs = [spec for spec in self.VIDEO_SPECS if spec[0].startswith("camera")]
+        usb_tab = QWidget()
+        usb_layout = QVBoxLayout(usb_tab)
+        usb_layout.setContentsMargins(4, 4, 4, 4)
+        usb_grid = QGridLayout()
+        usb_grid.setSpacing(8)
+        prepare_video_grid(usb_grid, len(usb_specs))
+        for grid_index, spec in enumerate(usb_specs):
+            add_video_panel(usb_grid, spec, grid_index)
+        usb_layout.addLayout(usb_grid, 1)
+        video_tabs.addTab(usb_tab, f"USB Camera ({len(usb_specs)}路)")
+
+        d435i_specs = [spec for spec in self.VIDEO_SPECS if spec[0].startswith("d435i_")]
+        d435i_tab = QWidget()
+        d435i_layout = QVBoxLayout(d435i_tab)
+        d435i_layout.setContentsMargins(4, 4, 4, 4)
+        d435i_grid = QGridLayout()
+        d435i_grid.setSpacing(8)
+        prepare_video_grid(d435i_grid, len(d435i_specs))
+        for grid_index, spec in enumerate(d435i_specs):
+            add_video_panel(d435i_grid, spec, grid_index)
+        d435i_layout.addLayout(d435i_grid, 1)
+        video_tabs.addTab(d435i_tab, f"D435i ({len(d435i_specs)}路)")
+
+        video_layout.addWidget(video_tabs, 1)
 
         self.label_timeline = LabelTimelineWidget()
         video_layout.addWidget(self.label_timeline)
