@@ -1176,6 +1176,12 @@ class Page1Widget(QWidget):
         ("Angle Z", "angle", 2, (-180.0, 180.0)),
     ]
 
+    USB_CAMERA_COUNT = 4
+    D435I_RGB_WIDGET_INDEX = USB_CAMERA_COUNT
+    D435I_STEREO_WIDGET_INDEX = USB_CAMERA_COUNT + 1
+    D435I_WIDGET_INDICES = (D435I_RGB_WIDGET_INDEX, D435I_STEREO_WIDGET_INDEX)
+    CAMERA_GRID_COLUMNS = 3
+
     REMOTE_DEVICE_INSTANCE_ID = r"BTHLE\DEV_2A0798DB3597\8&3E274D5&2&2A0798DB3597"
     REMOTE_ALLOWED_KEYS = (
         ("Key_VolumeUp", 16777330),
@@ -1241,8 +1247,12 @@ class Page1Widget(QWidget):
         self.available_usb_devices = []
         self.cameras_initialized = False
         self.realsense = RealSenseD435iWorker(self)
-        self.realsense.rgb_frame.connect(lambda frame: self._update_image_widget(2, frame))
-        self.realsense.stereo_frame.connect(lambda frame: self._update_image_widget(3, frame))
+        self.realsense.rgb_frame.connect(
+            lambda frame: self._update_image_widget(self.D435I_RGB_WIDGET_INDEX, frame)
+        )
+        self.realsense.stereo_frame.connect(
+            lambda frame: self._update_image_widget(self.D435I_STEREO_WIDGET_INDEX, frame)
+        )
         self.realsense.status_changed.connect(self._on_realsense_status)
         self.realsense.error_occurred.connect(self.log_message)
 
@@ -1359,15 +1369,20 @@ class Page1Widget(QWidget):
         camera_top_row.addWidget(self.btn_refresh_video_devices)
         camera_group_layout.addLayout(camera_top_row)
         camera_grid = QGridLayout()
-        camera_grid.setColumnStretch(0, 1)
-        camera_grid.setColumnStretch(1, 1)
-        camera_grid.setRowStretch(0, 1)
-        camera_grid.setRowStretch(1, 1)
-        camera_titles = ["USB Camera 1", "USB Camera 2", "D435i RGB", "D435i Stereo"]
+        camera_titles = [
+            *(f"USB Camera {idx}" for idx in range(1, self.USB_CAMERA_COUNT + 1)),
+            "D435i RGB",
+            "D435i Stereo",
+        ]
+        for col in range(self.CAMERA_GRID_COLUMNS):
+            camera_grid.setColumnStretch(col, 1)
+        row_count = (len(camera_titles) + self.CAMERA_GRID_COLUMNS - 1) // self.CAMERA_GRID_COLUMNS
+        for row in range(row_count):
+            camera_grid.setRowStretch(row, 1)
         for idx, camera_title in enumerate(camera_titles):
             box = QGroupBox(camera_title)
             box_layout = QVBoxLayout(box)
-            if idx < 2:
+            if idx < self.USB_CAMERA_COUNT:
                 selector = RefreshCameraComboBox()
                 selector.setMinimumHeight(28)
                 selector.about_to_show.connect(self.refresh_camera_devices)
@@ -1382,7 +1397,7 @@ class Page1Widget(QWidget):
                 video = QLabel("等待 D435i 数据")
                 video.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 video.setStyleSheet("background: #111; color: #ccc;")
-            video.setMinimumSize(384, 216)
+            video.setMinimumSize(320, 180)
             video.setSizePolicy(
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Expanding,
@@ -1397,7 +1412,7 @@ class Page1Widget(QWidget):
             self.video_widgets.append(video)
             self.camera_labels.append(label)
             self.camera_status_labels.append(status)
-            camera_grid.addWidget(box, idx // 2, idx % 2)
+            camera_grid.addWidget(box, idx // self.CAMERA_GRID_COLUMNS, idx % self.CAMERA_GRID_COLUMNS)
         camera_group_layout.addLayout(camera_grid, 1)
         camera_tab_layout.addWidget(camera_group)
         data_tabs.addTab(camera_tab, "视频预览")
@@ -2007,7 +2022,7 @@ class Page1Widget(QWidget):
         self.cameras = []
         self.capture_sessions = []
         self.recorders = []
-        for idx in range(2):
+        for idx in range(self.USB_CAMERA_COUNT):
             session = QMediaCaptureSession(self)
             recorder = QMediaRecorder(self)
             recorder.recorderStateChanged.connect(
@@ -2040,12 +2055,12 @@ class Page1Widget(QWidget):
             self.camera_status_labels[idx].setText("状态: connected")
             self.camera_status_labels[idx].setStyleSheet("color: #138a36;")
 
-        for idx in range(len(self.cameras), 2):
+        for idx in range(len(self.cameras), self.USB_CAMERA_COUNT):
             self.cameras.append(None)
             self.recorders.append(None)
             self.capture_sessions.append(QMediaCaptureSession(self))
-        self.cameras.extend([None, None])
-        self.recorders.extend([None, None])
+        self.cameras.extend([None] * len(self.D435I_WIDGET_INDICES))
+        self.recorders.extend([None] * len(self.D435I_WIDGET_INDICES))
         self.cameras_initialized = True
 
     def refresh_camera_devices(self):
@@ -2115,7 +2130,7 @@ class Page1Widget(QWidget):
         return any(key in text for key in ("realsense", "d435", "depth camera"))
 
     def _stop_usb_cameras(self):
-        for idx, camera in enumerate(self.cameras[:2]):
+        for idx, camera in enumerate(self.cameras[:self.USB_CAMERA_COUNT]):
             if camera:
                 camera.stop()
             self.camera_labels[idx].setText("未连接")
@@ -2406,7 +2421,7 @@ class Page1Widget(QWidget):
             errors.append("IMU 未全部在线：" + "、".join(missing_imus))
 
         missing_cameras = []
-        for idx in range(2):
+        for idx in range(self.USB_CAMERA_COUNT):
             camera = self.cameras[idx] if idx < len(self.cameras) else None
             if camera is None:
                 missing_cameras.append(f"Camera{idx + 1}")
@@ -2501,8 +2516,8 @@ class Page1Widget(QWidget):
         self.task_type_combo.setEnabled(False)
         for combo in self.camera_selects:
             combo.setEnabled(False)
-        camera_count = 3 if self._d435i_recording_enabled() else 2
-        self.log_message(f"采集已开始：{self.task_type_combo.currentText()}，5 个 IMU 与 {camera_count} 路相机已进入同步记录。")
+        video_channel_count = self.USB_CAMERA_COUNT + (len(self.D435I_WIDGET_INDICES) if self._d435i_recording_enabled() else 0)
+        self.log_message(f"采集已开始：{self.task_type_combo.currentText()}，5 个 IMU 与 {video_channel_count} 路视频已进入同步记录。")
         self.log_message(f"会话：{os.path.basename(self.session_dir)}")
         self.log_message("等待遥控双击标记实验开始。")
 
@@ -2546,7 +2561,7 @@ class Page1Widget(QWidget):
 
     def _write_session_metadata(self, subject: str, ports: List[int], session_start_ts: float):
         usb_cameras = []
-        for idx in range(2):
+        for idx in range(self.USB_CAMERA_COUNT):
             camera = self.cameras[idx] if idx < len(self.cameras) else None
             label = self.camera_labels[idx].text() if idx < len(self.camera_labels) else ""
             usb_cameras.append({
@@ -2586,8 +2601,7 @@ class Page1Widget(QWidget):
                 "file": "session_sync.csv",
                 "timestamp_zero": "Relative timestamps use session_start_pc_timestamp.",
                 "required_devices": [
-                    "camera1",
-                    "camera2",
+                    *(f"camera{idx}" for idx in range(1, self.USB_CAMERA_COUNT + 1)),
                     *([] if not d435i_enabled else ["d435i"]),
                     "WT IMU 1-5",
                     "bluetooth_remote",
@@ -2622,7 +2636,7 @@ class Page1Widget(QWidget):
             writer.writerow([device, event, f"{pc_ts:.6f}", f"{pc_ts - start_ts:.6f}", detail])
 
     def _start_camera_recording(self):
-        for idx, recorder in enumerate(self.recorders[:2], start=1):
+        for idx, recorder in enumerate(self.recorders[:self.USB_CAMERA_COUNT], start=1):
             if recorder is None or self.cameras[idx - 1] is None:
                 continue
             output_path = os.path.join(self.session_dir, f"camera{idx}.mp4")
@@ -2633,7 +2647,7 @@ class Page1Widget(QWidget):
             self._append_sync_event(f"camera{idx}", "record_start_requested", request_ts, f"file=camera{idx}.mp4")
 
     def _stop_camera_recording(self):
-        for idx, recorder in enumerate(self.recorders[:2], start=1):
+        for idx, recorder in enumerate(self.recorders[:self.USB_CAMERA_COUNT], start=1):
             if recorder is not None and recorder.recorderState() != QMediaRecorder.RecorderState.StoppedState:
                 recorder.stop()
                 request_ts = time.time()
@@ -2712,7 +2726,7 @@ class Page1Widget(QWidget):
 
     def _on_realsense_status(self, status: str, detail: str):
         color = "#138a36" if status == "connected" else "#b00020"
-        for idx in (2, 3):
+        for idx in self.D435I_WIDGET_INDICES:
             self.camera_labels[idx].setText(detail)
             self.camera_status_labels[idx].setText(f"状态: {status}")
             self.camera_status_labels[idx].setStyleSheet(f"color: {color};")

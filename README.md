@@ -5,7 +5,7 @@ UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位
 ## 主要功能
 
 - Page1 采集界面
-  - 采集 2 路 USB 相机视频。
+  - 采集 4 路 USB 相机视频。
   - 可选采集 Intel RealSense D435i RGB、Stereo、depth raw 及相关帧时间信息。
   - 通过 UDP 接收 5 个 WT IMU 数据。
   - 检查相机、IMU、D435i、蓝牙遥控器连接状态。
@@ -24,7 +24,7 @@ UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位
 
 - Windows 10/11。
 - Python 环境，当前开发调试环境为 Anaconda `video` 环境，Python 3.10.20。
-- 2 个 USB 相机。
+- 4 个 USB 相机。
 - 5 个 WT IMU，使用 UDP 发送数据到上位机。
 - Intel RealSense D435i，可在界面中选择是否启用。
 - 蓝牙 LE 单按钮遥控器，连接到 Windows 后按键映射为音量键。
@@ -57,14 +57,14 @@ python main.py
 1. 确认 5 个 WT IMU 与电脑位于同一 Wi-Fi 网络。
 2. 将 IMU 的 UDP 目标地址设置为电脑当前 IPv4 地址，目标端口为 `1399`。
 3. 确认 Windows 防火墙允许当前 Python 程序接收 UDP 数据。
-4. 连接 2 个 USB 相机。
+4. 连接 4 个 USB 相机。
 5. 如需 D435i 数据，在界面中勾选“开启 D435i 视频采集”，并确认 D435i 已连接。
 6. 将蓝牙遥控器连接到 Windows，并在蓝牙遥控器框内刷新连接状态。
 
 点击“开始采集”前，程序会对关键设备做预检：
 
 - 5 个 IMU 需要在线。
-- 2 个 USB 相机需要在线。
+- 4 个 USB 相机需要在线。
 - 若开启 D435i 视频采集，D435i 需要在线。
 - 蓝牙遥控器需要处于连接状态。
 
@@ -99,6 +99,8 @@ session/
   imu.csv
   camera1.mp4
   camera2.mp4
+  camera3.mp4
+  camera4.mp4
   remote_fog_events.csv
   remote_fog_intervals.csv
   baselines/
@@ -113,7 +115,7 @@ session/
 说明：
 
 - `imu.csv`：WT IMU 原始采集数据，时间戳相对本次 session 开始时间。
-- `camera1.mp4` / `camera2.mp4`：两路 USB 相机视频。
+- `camera1.mp4` 到 `camera4.mp4`：四路 USB 相机视频。
 - `D435i/`：仅在开启 D435i 视频采集时生成。
 - `session_events.csv`：采集流程事件。
 - `session_sync.csv`：各设备开始/停止时间记录，用于后续对齐。
@@ -214,4 +216,3 @@ git push -u origin main
 ```
 
 若 Windows 用户名包含中文导致 SSH known hosts 写入失败，可以使用独立的英文路径保存 SSH key 和 known_hosts。
-

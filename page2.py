@@ -136,9 +136,12 @@ class LabelTimelineWidget(QWidget):
 
 
 class Page2Widget(QWidget):
+    VIDEO_GRID_COLUMNS = 3
     VIDEO_SPECS = [
         ("camera1", "Camera 1", "camera1.mp4", "camera1_record_requested"),
         ("camera2", "Camera 2", "camera2.mp4", "camera2_record_requested"),
+        ("camera3", "Camera 3", "camera3.mp4", "camera3_record_requested"),
+        ("camera4", "Camera 4", "camera4.mp4", "camera4_record_requested"),
         ("d435i_rgb", "D435i RGB", "D435i/RGB.mp4", "d435i_record_requested"),
         ("d435i_stereo", "D435i Stereo", "D435i/Stereo.mp4", "d435i_record_requested"),
     ]
@@ -176,7 +179,7 @@ class Page2Widget(QWidget):
         self.dir_input = QLineEdit(os.path.abspath("data"))
         self.btn_browse = QPushButton("选择保存目录")
         self.btn_browse.clicked.connect(self.choose_session_dir)
-        self.btn_load = QPushButton("加载4路视频")
+        self.btn_load = QPushButton(f"加载{len(self.VIDEO_SPECS)}路视频")
         self.btn_load.clicked.connect(lambda: self.load_session_videos())
         source_layout.addWidget(QLabel("会话目录"), 0, 0)
         source_layout.addWidget(self.dir_input, 0, 1)
@@ -185,10 +188,15 @@ class Page2Widget(QWidget):
         root.addWidget(source_group)
 
         middle = QHBoxLayout()
-        video_group = QGroupBox("4路视频同步标注")
+        video_group = QGroupBox(f"{len(self.VIDEO_SPECS)}路视频同步标注")
         video_layout = QVBoxLayout(video_group)
         self.video_grid = QGridLayout()
         self.video_grid.setSpacing(8)
+        for col in range(self.VIDEO_GRID_COLUMNS):
+            self.video_grid.setColumnStretch(col, 1)
+        row_count = (len(self.VIDEO_SPECS) + self.VIDEO_GRID_COLUMNS - 1) // self.VIDEO_GRID_COLUMNS
+        for row in range(row_count):
+            self.video_grid.setRowStretch(row, 1)
         self.video_labels: Dict[str, QLabel] = {}
         self.status_labels: Dict[str, QLabel] = {}
         for index, (key, title, _rel_path, _event_name) in enumerate(self.VIDEO_SPECS):
@@ -196,7 +204,7 @@ class Page2Widget(QWidget):
             panel_layout = QVBoxLayout(panel)
             video_label = QLabel("未加载")
             video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            video_label.setMinimumSize(420, 236)
+            video_label.setMinimumSize(320, 180)
             video_label.setStyleSheet("background: #111; color: #ddd;")
             status_label = QLabel("missing")
             status_label.setStyleSheet("color: #666;")
@@ -204,7 +212,7 @@ class Page2Widget(QWidget):
             panel_layout.addWidget(status_label)
             self.video_labels[key] = video_label
             self.status_labels[key] = status_label
-            self.video_grid.addWidget(panel, index // 2, index % 2)
+            self.video_grid.addWidget(panel, index // self.VIDEO_GRID_COLUMNS, index % self.VIDEO_GRID_COLUMNS)
         video_layout.addLayout(self.video_grid, 1)
 
         self.label_timeline = LabelTimelineWidget()
@@ -400,9 +408,8 @@ class Page2Widget(QWidget):
             first_frame_ts = self._first_d435i_frame_timestamp_s()
             if first_frame_ts is not None:
                 return int(first_frame_ts * 1000)
-        if key in ("camera1", "camera2"):
-            camera_index = "1" if key == "camera1" else "2"
-            started_event = f"camera{camera_index}_recording_started"
+        if key.startswith("camera") and key[6:].isdigit():
+            started_event = f"{key}_recording_started"
             if started_event in events:
                 return int(float(events[started_event]) * 1000)
         return int(float(events.get(event_name, 0.0)) * 1000)
