@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#B8C4D6"/></marker>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#CBD5E1" flood-opacity=".65"/></filter>
+</defs>
+<rect width="100%" height="100%" fill="#F8FAFC"/>
+<text x="40" y="48" font-family="Microsoft YaHei, SimHei, Arial" font-size="28" fill="#17202A" font-weight="900" text-anchor="start">标注端工作流：从粗标签到模型训练标签</text>
+<rect x="70" y="130" width="240" height="125" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="190.0" y="162" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">加载 Session</text>
+<text x="190.0" y="200" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">自动加载当前/最近 session / 读取 6</text>
+<text x="190.0" y="216" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">路视频与事件文件</text>
+<line x1="310" y1="192" x2="360" y2="192" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="370" y="130" width="240" height="125" rx="8" fill="white" stroke="#00A7C7" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="490.0" y="162" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#00A7C7" font-weight="800" text-anchor="middle">同步回放</text>
+<text x="490.0" y="200" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">USB 与 D435i 分页浏览 / 按</text>
+<text x="490.0" y="216" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">recording_started /</text>
+<text x="490.0" y="232" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">D435i 首帧时间对齐</text>
+<line x1="610" y1="192" x2="660" y2="192" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="670" y="130" width="240" height="125" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="790.0" y="162" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">人工精修</text>
+<text x="790.0" y="200" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">时间轴显示 experiment /</text>
+<text x="790.0" y="216" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">pre-fog / fog / 表格编辑 FOG</text>
+<text x="790.0" y="232" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">起止</text>
+<line x1="910" y1="192" x2="960" y2="192" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="970" y="130" width="240" height="125" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1090.0" y="162" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">标签导出</text>
+<text x="1090.0" y="200" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">imu_labeled.csv /</text>
+<text x="1090.0" y="216" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">time_labeled.csv /</text>
+<text x="1090.0" y="232" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">fog_intervals_edited.csv</text>
+<text x="90" y="345" font-family="Microsoft YaHei, SimHei, Arial" font-size="22" fill="#17202A" font-weight="900" text-anchor="start">标签时间轴语义</text>
+<rect x="90" y="380" width="1080" height="28" rx="14" fill="#D7DBE2"/>
+<rect x="310" y="380" width="160" height="28" rx="14" fill="#FCD34D" opacity=".85"/>
+<rect x="470" y="380" width="190" height="28" rx="14" fill="#EF4444" opacity=".8"/>
+<rect x="210" y="370" width="720" height="48" rx="20" fill="#3B82F6" opacity=".14" stroke="#2563EB" stroke-width="2"/>
+<text x="250" y="455" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#2F6BFF" font-weight="800" text-anchor="start">experiment 区间</text>
+<text x="340" y="360" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#F59E0B" font-weight="800" text-anchor="start">pre-fog</text>
+<text x="520" y="360" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#E45757" font-weight="800" text-anchor="start">fog</text>
+<text x="90" y="505" font-family="Microsoft YaHei, SimHei, Arial" font-size="17" fill="#17202A" font-weight="600" text-anchor="start">导出结果面向后续 FOG 检测建模：每条 IMU 样本增加 label 列，支持三分类或二分类。</text>
+</svg>

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#B8C4D6"/></marker>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#CBD5E1" flood-opacity=".65"/></filter>
+</defs>
+<rect width="100%" height="100%" fill="#F8FAFC"/>
+<text x="40" y="48" font-family="Microsoft YaHei, SimHei, Arial" font-size="28" fill="#17202A" font-weight="900" text-anchor="start">工程工作量量化</text>
+<text x="40" y="78" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#5D6D7E" font-weight="400" text-anchor="start">统计对象：main.py / page1.py / page2.py 当前版本</text>
+<rect x="70" y="115" width="230" height="90" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="185.0" y="147" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">核心代码行</text>
+<text x="185" y="178" font-family="Microsoft YaHei, SimHei, Arial" font-size="34" fill="#2F6BFF" font-weight="900" text-anchor="middle">3988</text>
+<rect x="360" y="115" width="230" height="90" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="475.0" y="147" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">有效代码行</text>
+<text x="475" y="178" font-family="Microsoft YaHei, SimHei, Arial" font-size="34" fill="#10A66A" font-weight="900" text-anchor="middle">3622</text>
+<rect x="650" y="115" width="230" height="90" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="765.0" y="147" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">类</text>
+<text x="765" y="178" font-family="Microsoft YaHei, SimHei, Arial" font-size="34" fill="#F59E0B" font-weight="900" text-anchor="middle">8</text>
+<rect x="940" y="115" width="230" height="90" rx="8" fill="white" stroke="#7C3AED" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1055.0" y="147" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#7C3AED" font-weight="800" text-anchor="middle">函数/方法</text>
+<text x="1055" y="178" font-family="Microsoft YaHei, SimHei, Arial" font-size="34" fill="#7C3AED" font-weight="900" text-anchor="middle">187</text>
+<text x="70" y="285" font-family="Microsoft YaHei, SimHei, Arial" font-size="22" fill="#17202A" font-weight="900" text-anchor="start">各模块代码规模</text>
+<text x="70" y="350" font-family="Microsoft YaHei, SimHei, Arial" font-size="17" fill="#17202A" font-weight="800" text-anchor="start">main.py</text>
+<rect x="250" y="325" width="780" height="30" rx="5" fill="#E2E8F0"/>
+<rect x="250" y="325" width="27" height="30" rx="5" fill="#7C3AED"/>
+<text x="289" y="347" font-family="Microsoft YaHei, SimHei, Arial" font-size="15" fill="#5D6D7E" font-weight="700" text-anchor="start">101 行 / 7 函数</text>
+<text x="70" y="414" font-family="Microsoft YaHei, SimHei, Arial" font-size="17" fill="#17202A" font-weight="800" text-anchor="start">page1.py</text>
+<rect x="250" y="389" width="780" height="30" rx="5" fill="#E2E8F0"/>
+<rect x="250" y="389" width="780" height="30" rx="5" fill="#2F6BFF"/>
+<text x="1042" y="411" font-family="Microsoft YaHei, SimHei, Arial" font-size="15" fill="#5D6D7E" font-weight="700" text-anchor="start">2904 行 / 125 函数</text>
+<text x="70" y="478" font-family="Microsoft YaHei, SimHei, Arial" font-size="17" fill="#17202A" font-weight="800" text-anchor="start">page2.py</text>
+<rect x="250" y="453" width="780" height="30" rx="5" fill="#E2E8F0"/>
+<rect x="250" y="453" width="264" height="30" rx="5" fill="#10A66A"/>
+<text x="526" y="475" font-family="Microsoft YaHei, SimHei, Arial" font-size="15" fill="#5D6D7E" font-weight="700" text-anchor="start">983 行 / 55 函数</text>
+<text x="70" y="545" font-family="Microsoft YaHei, SimHei, Arial" font-size="22" fill="#17202A" font-weight="900" text-anchor="start">实现覆盖面</text>
+<rect x="70" y="585" width="340" height="52" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="240.0" y="617" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">多设备接入</text>
+<text x="240.0" y="655" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">4 USB + D435i + 5 IMU + 蓝牙</text>
+<rect x="460" y="585" width="340" height="52" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="630.0" y="617" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">同步记录</text>
+<text x="630.0" y="655" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">session_start + events + sync</text>
+<rect x="850" y="585" width="340" height="52" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1020.0" y="617" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">实时反馈</text>
+<text x="1020.0" y="655" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">视频预览、IMU 表格、曲线、状态灯</text>
+<rect x="70" y="659" width="340" height="52" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="240.0" y="691" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">标注导出</text>
+<text x="240.0" y="729" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">6 路回放、时间轴、标签 CSV</text>
+<rect x="460" y="659" width="340" height="52" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="630.0" y="691" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">工程交付</text>
+<text x="630.0" y="729" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">README、PyInstaller、dist exe</text>
+</svg>

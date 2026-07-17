@@ -1,6 +1,8 @@
 import csv
+import json
 import os
 import time
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import cv2
@@ -157,6 +159,7 @@ class Page2Widget(QWidget):
         self._seeking = False
         self._play_started_at = 0.0
         self._play_start_ms = 0
+        self.session_start_pc_ts: Optional[float] = None
         self.fog_start_ms: Optional[int] = None
         self.fog_intervals: List[Tuple[int, int]] = []
         self.experiment_intervals: List[Tuple[int, Optional[int]]] = []
@@ -375,6 +378,7 @@ class Page2Widget(QWidget):
                 QMessageBox.warning(self, "加载视频", f"目录不存在:\n{self.session_dir}")
             return
 
+        self.session_start_pc_ts = self._read_session_start_pc_timestamp()
         events = self._read_session_events()
         max_end_ms = 0
         first_fps = None
@@ -451,8 +455,9 @@ class Page2Widget(QWidget):
         try:
             with open(path, "r", newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
+                time_column = self._preferred_time_column(reader.fieldnames or [])
                 for row in reader:
-                    return float(row.get("pc_timestamp", "0"))
+                    return self._timestamp_from_row(row, time_column)
         except (OSError, ValueError):
             return None
         return None
@@ -468,8 +473,8 @@ class Page2Widget(QWidget):
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    start_ms = int(float(row.get("start_timestamp", "0")) * 1000)
-                    end_ms = int(float(row.get("end_timestamp", "0")) * 1000)
+                    start_ms = int(float(row.get("start_sync_timestamp") or row.get("start_timestamp", "0")) * 1000)
+                    end_ms = int(float(row.get("end_sync_timestamp") or row.get("end_timestamp", "0")) * 1000)
                 except ValueError:
                     continue
                 if end_ms <= start_ms:
@@ -494,7 +499,7 @@ class Page2Widget(QWidget):
                 if event_type not in ("experiment_start", "experiment_end", "experiment_end_auto_stop"):
                     continue
                 try:
-                    timestamp_ms = int(float(row.get("relative_timestamp", "0")) * 1000)
+                    timestamp_ms = int(float(row.get("sync_timestamp") or row.get("relative_timestamp", "0")) * 1000)
                 except ValueError:
                     continue
                 try:
@@ -601,17 +606,22 @@ class Page2Widget(QWidget):
         include_prefog = self._include_prefog()
         with open(imu_path, "r", newline="", encoding="utf-8") as src:
             reader = csv.DictReader(src)
-            if not reader.fieldnames or "pc_timestamp" not in reader.fieldnames:
-                QMessageBox.warning(self, "导出标签", "imu.csv 中未找到 pc_timestamp 列。")
+            time_column = self._preferred_time_column(reader.fieldnames or [])
+            if not reader.fieldnames or time_column is None:
+                QMessageBox.warning(self, "导出标签", "imu.csv 中未找到 sync_timestamp 或 pc_timestamp 列。")
                 return
-            fieldnames = [name for name in reader.fieldnames if name != "label"] + ["label"]
+            fieldnames = [name for name in reader.fieldnames if name != "label"]
+            add_sync_timestamp = "sync_timestamp" not in fieldnames
+            if add_sync_timestamp:
+                insert_at = fieldnames.index("pc_timestamp") if "pc_timestamp" in fieldnames else 0
+                fieldnames.insert(insert_at, "sync_timestamp")
+            fieldnames.append("label")
             rows = []
             for row in reader:
-                try:
-                    ts = float(row.get("pc_timestamp", "0"))
-                except ValueError:
-                    ts = 0.0
+                ts = self._timestamp_from_row(row, time_column)
                 row = dict(row)
+                if add_sync_timestamp:
+                    row["sync_timestamp"] = f"{ts:.6f}"
                 row["label"] = str(self._label_for_time(ts, prefog_s, include_prefog))
                 rows.append(row)
 
@@ -621,7 +631,7 @@ class Page2Widget(QWidget):
             writer.writerows(rows)
         # 生成关键时间点文件: experiment start/end, FOG start/end, pre-fog start
         time_output_path = os.path.join(session_dir, "time_labeled.csv")
-        time_fieldnames = ["timestamp", "event_type"]
+        time_fieldnames = ["sync_timestamp", "event_type"]
         with open(time_output_path, "w", newline="", encoding="utf-8") as tdst:
             twriter = csv.DictWriter(tdst, fieldnames=time_fieldnames)
             twriter.writeheader()
@@ -652,7 +662,10 @@ class Page2Widget(QWidget):
             events.append({"timestamp": end_ms / 1000.0, "event_type": "fog_end"})
         events.sort(key=lambda row: (float(row["timestamp"]), str(row["event_type"])))
         return [
-            {"timestamp": f"{float(row['timestamp']):.6f}", "event_type": row["event_type"]}
+            {
+                "sync_timestamp": f"{float(row['timestamp']):.6f}",
+                "event_type": row["event_type"],
+            }
             for row in events
         ]
 
@@ -660,7 +673,12 @@ class Page2Widget(QWidget):
         with open(output_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["interval_index", "start_timestamp", "end_timestamp", "duration_s"],
+                fieldnames=[
+                    "interval_index",
+                    "start_sync_timestamp",
+                    "end_sync_timestamp",
+                    "duration_s",
+                ],
             )
             writer.writeheader()
             for index, (start_ms, end_ms) in enumerate(self.fog_intervals, start=1):
@@ -668,8 +686,8 @@ class Page2Widget(QWidget):
                 end_s = end_ms / 1000.0
                 writer.writerow({
                     "interval_index": index,
-                    "start_timestamp": f"{start_s:.6f}",
-                    "end_timestamp": f"{end_s:.6f}",
+                    "start_sync_timestamp": f"{start_s:.6f}",
+                    "end_sync_timestamp": f"{end_s:.6f}",
                     "duration_s": f"{max(0.0, end_s - start_s):.6f}",
                 })
 
@@ -727,20 +745,112 @@ class Page2Widget(QWidget):
             label.setText("读取失败")
             label.setPixmap(QtGui.QPixmap())
             return
-        self._show_frame(label, frame)
+        self._show_frame(label, frame, self._format_world_time(session_ms))
 
-    def _show_frame(self, label: QLabel, frame):
+    def _show_frame(self, label: QLabel, frame, world_time_text: str = ""):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, _channels = rgb.shape
         image = QtGui.QImage(rgb.data, w, h, 3 * w, QtGui.QImage.Format.Format_RGB888).copy()
         pixmap = QtGui.QPixmap.fromImage(image)
-        label.setPixmap(
-            pixmap.scaled(
-                label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+        scaled = pixmap.scaled(
+            label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
+        if world_time_text:
+            self._paint_world_time_overlay(scaled, world_time_text)
+        label.setPixmap(scaled)
+
+    def _paint_world_time_overlay(self, pixmap: QtGui.QPixmap, text: str):
+        if not text or pixmap.isNull():
+            return
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+
+        font = QtGui.QFont("Arial")
+        pixel_size = max(11, min(24, int(pixmap.height() * 0.065)))
+        metrics = None
+        for _ in range(10):
+            font.setPixelSize(pixel_size)
+            font.setBold(True)
+            painter.setFont(font)
+            metrics = painter.fontMetrics()
+            if metrics.horizontalAdvance(text) <= pixmap.width() - 18 or pixel_size <= 8:
+                break
+            pixel_size -= 1
+        if metrics is None:
+            painter.end()
+            return
+
+        margin = max(6, int(pixel_size * 0.45))
+        padding_x = max(6, int(pixel_size * 0.45))
+        padding_y = max(3, int(pixel_size * 0.28))
+        text_width = metrics.horizontalAdvance(text)
+        text_height = metrics.height()
+        rect_width = min(pixmap.width() - margin * 2, text_width + padding_x * 2)
+        rect_height = text_height + padding_y * 2
+        x = max(margin, pixmap.width() - rect_width - margin)
+        y = margin
+        rect = QtCore.QRectF(x, y, rect_width, rect_height)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor(0, 0, 0, 170))
+        painter.drawRoundedRect(rect, 4, 4)
+        painter.setPen(QtGui.QColor("#FFFFFF"))
+        painter.drawText(
+            QtCore.QRectF(x + padding_x, y + padding_y, rect_width - padding_x * 2, text_height),
+            Qt.AlignmentFlag.AlignCenter,
+            text,
+        )
+        painter.end()
+
+    def _read_session_start_pc_timestamp(self) -> Optional[float]:
+        for rel_path in ("session_metadata.json", os.path.join("D435i", "metadata.json")):
+            path = os.path.join(self.session_dir, rel_path)
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    value = json.load(f).get("session_start_pc_timestamp")
+                if value not in (None, ""):
+                    return float(value)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+
+        events_path = os.path.join(self.session_dir, "session_events.csv")
+        if not os.path.exists(events_path):
+            return None
+        try:
+            with open(events_path, "r", newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        except OSError:
+            return None
+
+        for row in rows:
+            if (row.get("event") or "").strip() != "recording_zero":
+                continue
+            try:
+                return float(row.get("pc_timestamp", ""))
+            except (TypeError, ValueError):
+                pass
+
+        for row in rows:
+            try:
+                pc_ts = float(row.get("pc_timestamp", ""))
+                rel_ts = self._timestamp_from_row(row, self._preferred_time_column(row.keys()))
+            except (TypeError, ValueError):
+                continue
+            return pc_ts - rel_ts
+        return None
+
+    def _format_world_time(self, session_ms: int) -> str:
+        if self.session_start_pc_ts is None:
+            return ""
+        try:
+            ts = self.session_start_pc_ts + max(0, int(session_ms)) / 1000.0
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        except (OSError, OverflowError, ValueError):
+            return ""
 
     def current_time_ms(self) -> int:
         return self.slider.value()
@@ -855,7 +965,11 @@ class Page2Widget(QWidget):
         self.current_label.setText(f"当前标签: {names[label]} ({label})")
 
     def _update_time_label(self, current_ms: int):
-        self.time_label.setText(f"{self._format_ms(current_ms)} / {self._format_ms(self.duration_ms)}")
+        text = f"{self._format_ms(current_ms)} / {self._format_ms(self.duration_ms)}"
+        world_time = self._format_world_time(current_ms)
+        if world_time:
+            text = f"{text} | {world_time}"
+        self.time_label.setText(text)
 
     def _include_prefog(self) -> bool:
         return int(self.label_mode_combo.currentData() or 3) == 3
@@ -908,14 +1022,34 @@ class Page2Widget(QWidget):
             return events
         try:
             with open(path, "r", newline="", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
+                reader = csv.DictReader(f)
+                time_column = self._preferred_time_column(reader.fieldnames or [])
+                for row in reader:
                     event = row.get("event", "")
                     if not event:
                         continue
-                    events[event] = float(row.get("relative_timestamp", 0.0))
+                    events[event] = self._timestamp_from_row(row, time_column)
         except Exception:
             return {}
         return events
+
+    @staticmethod
+    def _preferred_time_column(fieldnames) -> Optional[str]:
+        if not fieldnames:
+            return None
+        for column in ("sync_timestamp", "pc_timestamp", "relative_timestamp", "timestamp"):
+            if column in fieldnames:
+                return column
+        return None
+
+    @staticmethod
+    def _timestamp_from_row(row: dict, column: Optional[str]) -> float:
+        if not column:
+            return 0.0
+        try:
+            return float(row.get(column, "0") or "0")
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def _format_ms(value_ms: int) -> str:
@@ -967,6 +1101,7 @@ class Page2Widget(QWidget):
                 capture.release()
         self.videos.clear()
         self.duration_ms = 0
+        self.session_start_pc_ts = None
         self.slider.setRange(0, 0)
         self._refresh_label_timeline(0)
         for key, label in self.video_labels.items():

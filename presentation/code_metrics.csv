@@ -1,0 +1,5 @@
+file,lines,loc,classes,functions
+main.py,101,82,1,7
+page1.py,2904,2649,5,125
+page2.py,983,891,2,55
+TOTAL,3988,3622,8,187

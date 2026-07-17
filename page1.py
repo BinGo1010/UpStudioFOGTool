@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import os
 import queue
 import re
@@ -134,6 +135,8 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
     WIFI_PASSWORD = "66666666"
     WT_FRAME_LEN = 54
     UI_EMIT_INTERVAL_S = 0.05
+    EXPECTED_SAMPLE_PERIOD_MS = 5.0
+    DEVICE_CLOCK_ROLLOVER_MS = 24 * 60 * 60 * 1000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -153,6 +156,8 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         self._port_sockets: Dict[int, socket.socket] = {}
         self._device_endpoints: Dict[int, tuple] = {}
         self._raw_packet_counts: Dict[int, int] = {}
+        self._recording_sample_counts: Dict[int, int] = {}
+        self._recording_clock_states: Dict[int, dict] = {}
         self._unknown_device_ids: set = set()
         self._unparsed_packet_counts: Dict[int, int] = {}
         self._command_lock = threading.Lock()
@@ -206,9 +211,15 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             self._write_queue = queue.Queue(maxsize=100000)
             self._writer_running = True
             self._dropped_rows = 0
+            self._recording_sample_counts = {i: 0 for i in self.DEVICE_IDS}
+            self._recording_clock_states = {}
             self._csv_writer.writerow([
-                "pc_timestamp",
+                "world_time",
+                "sync_timestamp",
                 "imu_index",
+                "sample_counter",
+                "dropped_samples_since_previous",
+                "cumulative_dropped_samples",
                 "acc_x",
                 "acc_y",
                 "acc_z",
@@ -339,22 +350,39 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
                     self._log_unparsed_udp_packet(port, addr, data, raw_count)
                     continue
 
+                csv_rows = []
                 with self._writer_lock:
                     start_ts = self._recording_start_ts
                     writer_active = self._csv_writer is not None and start_ts is not None
-                if writer_active:
-                    rel_ts = recv_ts - start_ts
-                    for row in rows:
-                        csv_row = [
-                            f"{rel_ts:.6f}",
-                            row["imu_index"],
-                            *row["acc_csv"],
-                            *row["gyr_csv"],
-                            *row["gnt_csv"],
-                            *row["angle_csv"],
-                            row["temperature_csv"],
-                            row["battery_percent"],
-                        ]
+                    if writer_active:
+                        pc_receive_elapsed_ts = recv_ts - start_ts
+                    else:
+                        pc_receive_elapsed_ts = 0.0
+
+                    if writer_active:
+                        for row in rows:
+                            imu_index = row["imu_index"]
+                            timing = self._recording_sample_timing(
+                                imu_index,
+                                row["device_clock_ms"],
+                                pc_receive_elapsed_ts,
+                            )
+                            csv_rows.append([
+                                self._format_world_time(start_ts + timing["sync_timestamp"]),
+                                f"{timing['sync_timestamp']:.6f}",
+                                imu_index,
+                                timing["sample_counter"],
+                                timing["dropped_samples_since_previous"],
+                                timing["cumulative_dropped_samples"],
+                                *row["acc_csv"],
+                                *row["gyr_csv"],
+                                *row["gnt_csv"],
+                                *row["angle_csv"],
+                                row["temperature_csv"],
+                                row["battery_percent"],
+                            ])
+                if csv_rows:
+                    for csv_row in csv_rows:
                         try:
                             self._write_queue.put_nowait(csv_row)
                         except queue.Full:
@@ -461,7 +489,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
                 targets.append((imu_index, addr, sock))
 
         if not targets:
-            self.error_occurred.emit("当前没有在线 IMU，无法发送命令。")
+            self.error_occurred.emit("No online IMU; cannot send command.")
             return
 
         thread = threading.Thread(
@@ -476,7 +504,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         with self._command_lock:
             try:
                 for imu_index, _addr, _sock in targets:
-                    self.command_status.emit(f"IMU{imu_index} {label}中")
+                    self.command_status.emit(f"IMU{imu_index} {label} sending")
 
                 for payload, delay, _step in sequence:
                     for _imu_index, addr, sock in targets:
@@ -485,9 +513,9 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
                         time.sleep(delay)
 
                 for imu_index, _addr, _sock in targets:
-                    self.command_status.emit(f"IMU{imu_index} {label}完成")
+                    self.command_status.emit(f"IMU{imu_index} {label} done")
             except Exception as exc:
-                self.error_occurred.emit(f"{label}命令发送失败: {exc}")
+                self.error_occurred.emit(f"{label} command failed: {exc}")
 
     def _parse_wt_frames(self, data: bytes) -> List[dict]:
         rows = []
@@ -534,6 +562,86 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
     def unparsed_packet_total(self) -> int:
         return sum(self._unparsed_packet_counts.values())
 
+    def _recording_sample_timing(
+        self,
+        imu_index: int,
+        device_clock_ms: int,
+        pc_receive_elapsed_ts: float,
+    ) -> dict:
+        period_ms = self.EXPECTED_SAMPLE_PERIOD_MS
+        state = self._recording_clock_states.get(imu_index)
+        if state is None:
+            state = {
+                "base_device_clock_ms": float(device_clock_ms),
+                "last_raw_device_clock_ms": float(device_clock_ms),
+                "clock_rollover_offset_ms": 0.0,
+                "last_unwrapped_device_clock_ms": float(device_clock_ms),
+                "base_sync_timestamp": float(pc_receive_elapsed_ts),
+                "received_sample_counter": 0,
+                "last_sample_counter": 0,
+                "sample_counter_offset": 0,
+                "last_sync_timestamp": float(pc_receive_elapsed_ts),
+                "cumulative_dropped_samples": 0,
+            }
+            self._recording_clock_states[imu_index] = state
+
+        raw_clock_ms = float(device_clock_ms)
+        last_raw_ms = float(state["last_raw_device_clock_ms"])
+        rollover_offset_ms = float(state["clock_rollover_offset_ms"])
+        raw_delta_ms = raw_clock_ms - last_raw_ms
+        half_rollover = self.DEVICE_CLOCK_ROLLOVER_MS / 2
+        if raw_delta_ms < -half_rollover:
+            rollover_offset_ms += self.DEVICE_CLOCK_ROLLOVER_MS
+        elif raw_delta_ms > half_rollover:
+            rollover_offset_ms -= self.DEVICE_CLOCK_ROLLOVER_MS
+
+        unwrapped_clock_ms = raw_clock_ms + rollover_offset_ms
+        device_elapsed_ms = unwrapped_clock_ms - float(state["base_device_clock_ms"])
+        if device_elapsed_ms < -period_ms:
+            # Device clock was reset during recording. Re-anchor timing while keeping counters monotonic.
+            last_sync_timestamp = float(state.get("last_sync_timestamp", pc_receive_elapsed_ts))
+            state["sample_counter_offset"] = int(state["last_sample_counter"])
+            state["base_device_clock_ms"] = unwrapped_clock_ms
+            state["base_sync_timestamp"] = max(
+                float(pc_receive_elapsed_ts),
+                last_sync_timestamp + period_ms / 1000.0,
+            )
+            device_elapsed_ms = 0.0
+
+        theoretical_elapsed_steps = max(0, int(math.floor(device_elapsed_ms / period_ms + 0.5)))
+        sample_counter = int(state.get("sample_counter_offset", 0)) + theoretical_elapsed_steps + 1
+        received_sample_counter = int(state["received_sample_counter"]) + 1
+        last_sample_counter = int(state["last_sample_counter"])
+        dropped_since_previous = max(0, sample_counter - last_sample_counter - 1) if last_sample_counter else 0
+        cumulative_dropped = int(state["cumulative_dropped_samples"]) + dropped_since_previous
+        sync_timestamp = float(state["base_sync_timestamp"]) + theoretical_elapsed_steps * period_ms / 1000.0
+
+        state["last_raw_device_clock_ms"] = raw_clock_ms
+        state["clock_rollover_offset_ms"] = rollover_offset_ms
+        state["last_unwrapped_device_clock_ms"] = unwrapped_clock_ms
+        state["received_sample_counter"] = received_sample_counter
+        state["last_sample_counter"] = sample_counter
+        state["last_sync_timestamp"] = sync_timestamp
+        state["cumulative_dropped_samples"] = cumulative_dropped
+        self._recording_sample_counts[imu_index] = received_sample_counter
+
+        return {
+            "sync_timestamp": sync_timestamp,
+            "device_elapsed_ms": device_elapsed_ms,
+            "sample_counter": sample_counter,
+            "received_sample_counter": received_sample_counter,
+            "dropped_samples_since_previous": dropped_since_previous,
+            "cumulative_dropped_samples": cumulative_dropped,
+        }
+
+    @staticmethod
+    def _format_world_time(timestamp_s: float) -> str:
+        try:
+            dt = datetime.fromtimestamp(float(timestamp_s))
+        except (OSError, OverflowError, TypeError, ValueError):
+            return ""
+        return dt.strftime("%H:%M:%S:") + f"{dt.microsecond // 1000:03d}"
+
     def _parse_wt_frame(self, frame: bytes) -> Optional[dict]:
         try:
             device_id = frame[:12].decode("ascii")
@@ -543,10 +651,13 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         if imu_index is None:
             return None
 
-        device_time = "20{}-{}-{} {}:{}:{}.{}".format(
-            frame[12], frame[13], frame[14], frame[15], frame[16], frame[17],
-            (frame[19] << 8 | frame[18]),
+        device_ms = frame[19] << 8 | frame[18]
+        device_time = (
+            f"20{frame[12]:02d}-{frame[13]:02d}-{frame[14]:02d} "
+            f"{frame[15]:02d}:{frame[16]:02d}:{frame[17]:02d}.{device_ms:03d}"
         )
+        device_timestamp_ms = (frame[15] * 3600 + frame[16] * 60 + frame[17]) * 1000 + device_ms
+        device_clock_ms = self._device_clock_ms_from_frame(frame, device_timestamp_ms)
         acc = [
             self._i16(frame[21] << 8 | frame[20]) / 32768 * 16,
             self._i16(frame[23] << 8 | frame[22]) / 32768 * 16,
@@ -573,6 +684,8 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             "imu_index": imu_index,
             "device_id": device_id,
             "device_time": device_time,
+            "device_timestamp_ms": device_timestamp_ms,
+            "device_clock_ms": device_clock_ms,
             "acc": [f"{value:.2f}" for value in acc],
             "gyr": [f"{value:.2f}" for value in gyr],
             "gnt": [f"{value:.2f}" for value in gnt],
@@ -587,6 +700,22 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             "rssi": self._i16(frame[49] << 8 | frame[48]),
             "version": self._i16(frame[51] << 8 | frame[50]),
         }
+
+    @staticmethod
+    def _device_clock_ms_from_frame(frame: bytes, fallback_day_ms: int) -> int:
+        try:
+            year = 2000 + int(frame[12])
+            month = int(frame[13])
+            day = int(frame[14])
+            hour = int(frame[15])
+            minute = int(frame[16])
+            second = int(frame[17])
+            millisecond = int(frame[19] << 8 | frame[18])
+            dt = datetime(year, month, day, hour, minute, second)
+            origin = datetime(2000, 1, 1)
+            return int((dt - origin).total_seconds() * 1000) + millisecond
+        except (ValueError, OverflowError):
+            return int(fallback_day_ms)
 
     @staticmethod
     def _i16(value: int) -> int:
@@ -731,7 +860,8 @@ class RealSenseD435iWorker(QtCore.QObject):
             self.frames_writer = csv.writer(self.frames_file)
             self.frames_writer.writerow([
                 "frame_index",
-                "pc_timestamp",
+                "world_time",
+                "sync_timestamp",
                 "rgb_frame_number",
                 "depth_frame_number",
                 "ir_left_frame_number",
@@ -742,7 +872,8 @@ class RealSenseD435iWorker(QtCore.QObject):
                 self.imu_file = open(os.path.join(output_dir, "imu.csv"), "w", newline="", encoding="utf-8")
                 self.imu_writer = csv.writer(self.imu_file)
                 self.imu_writer.writerow([
-                    "pc_timestamp",
+                    "world_time",
+                    "sync_timestamp",
                     "source",
                     "frame_number",
                     "sensor_timestamp_ms",
@@ -831,6 +962,7 @@ class RealSenseD435iWorker(QtCore.QObject):
                     if self.frames_writer is not None:
                         self.frames_writer.writerow([
                             frame_index,
+                            WtMultiImuUdpRecorder._format_world_time(self._recording_start_ts + rel_ts),
                             f"{rel_ts:.6f}",
                             color_number,
                             depth_number,
@@ -842,6 +974,7 @@ class RealSenseD435iWorker(QtCore.QObject):
                 elif kind == "motion" and self.imu_writer is not None:
                     for rel_ts, source, frame_number, sensor_ts, x, y, z in item[1]:
                         self.imu_writer.writerow([
+                            WtMultiImuUdpRecorder._format_world_time(self._recording_start_ts + rel_ts),
                             f"{rel_ts:.6f}",
                             source,
                             frame_number,
@@ -1134,7 +1267,7 @@ class RealSenseD435iWorker(QtCore.QObject):
         metadata.update({
             "recording_started_at": datetime.now().isoformat(timespec="seconds"),
             "session_start_pc_timestamp": f"{session_start_ts:.6f}",
-            "timestamp_zero": "All D435i CSV pc_timestamp values are relative to session_start_pc_timestamp.",
+            "timestamp_zero": "sync_timestamp is seconds relative to session_start_pc_timestamp; world_time is HH:MM:SS:mmm.",
             "subject": subject,
             "imu_ports": imu_ports,
             "files": {
@@ -1312,7 +1445,7 @@ class Page1Widget(QWidget):
 
         self.imu_table = QTableWidget(5, 16)
         self.imu_table.setHorizontalHeaderLabels([
-            "IMU", "端口", "状态", "包数",
+            "IMU", "Port", "Status", "Packets",
             "Acc X", "Acc Y", "Acc Z",
             "Gyr X", "Gyr Y", "Gyr Z",
             "Mag X", "Mag Y", "Mag Z",
@@ -1492,7 +1625,7 @@ class Page1Widget(QWidget):
         self.btn_stop.setEnabled(False)
         self.btn_start.clicked.connect(self.start_collection)
         self.btn_stop.clicked.connect(self.stop_collection)
-        self.enable_d435i_checkbox = QCheckBox("开启 D435i 视频采集")
+        self.enable_d435i_checkbox = QCheckBox("启用 D435i 视频采集")
         self.enable_d435i_checkbox.setChecked(True)
         self.enable_d435i_checkbox.setToolTip("关闭后本次采集不检查、不录制 D435i RGB/Stereo/depth_raw 数据")
         self.btn_record_baseline = QPushButton("记录佩戴基线")
@@ -1641,7 +1774,7 @@ class Page1Widget(QWidget):
         self._append_remote_fog_event("experiment_start", pc_ts, key_name, key_code, interval_index)
         self._append_session_event("remote_experiment_start", pc_ts)
         self._update_remote_experiment_label()
-        self.log_message(f"实验开始 #{interval_index}: {self._relative_timestamp(pc_ts):.3f}s")
+        self.log_message(f"实验开始 #{interval_index}: {self._event_sync_timestamp(pc_ts):.3f}s")
 
         baseline_path = self._save_wearing_baseline(
             allow_recording=True,
@@ -1660,12 +1793,12 @@ class Page1Widget(QWidget):
     ):
         interval_index = self.remote_experiment_interval_count + 1
         if self.remote_experiment_start_pc_ts is not None:
-            start_rel = self._relative_timestamp(self.remote_experiment_start_pc_ts)
-            end_rel = max(start_rel, self._relative_timestamp(pc_ts))
+            start_rel = self._event_sync_timestamp(self.remote_experiment_start_pc_ts)
+            end_rel = max(start_rel, self._event_sync_timestamp(pc_ts))
             duration_s = end_rel - start_rel
             self.log_message(f"实验结束 #{interval_index}: {end_rel:.3f}s，时长 {duration_s:.3f}s")
         else:
-            self.log_message(f"实验结束 #{interval_index}: {self._relative_timestamp(pc_ts):.3f}s")
+            self.log_message(f"实验结束 #{interval_index}: {self._event_sync_timestamp(pc_ts):.3f}s")
         self._append_remote_fog_event(event_type, pc_ts, key_name, key_code, interval_index)
         self._append_session_event(
             "remote_experiment_end" if event_type == "experiment_end" else "remote_experiment_end_auto_stop",
@@ -1689,23 +1822,23 @@ class Page1Widget(QWidget):
         self.remote_fog_intervals_path = os.path.join(self.session_dir, "remote_fog_intervals.csv")
         with open(self.remote_fog_events_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["event_type", "relative_timestamp", "pc_timestamp", "key_name", "key_code", "interval_index"])
+            writer.writerow(["event_type", "world_time", "sync_timestamp", "key_name", "key_code", "interval_index"])
         with open(self.remote_fog_intervals_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
                 "interval_index",
-                "start_timestamp",
-                "end_timestamp",
+                "start_world_time",
+                "end_world_time",
+                "start_sync_timestamp",
+                "end_sync_timestamp",
                 "duration_s",
-                "start_pc_timestamp",
-                "end_pc_timestamp",
                 "start_key",
                 "end_key",
             ])
         self._update_remote_fog_label()
         self._update_remote_experiment_label()
         self.log_message(
-            "遥控标注已就绪：单击标记 FOG，1.0s 内双击标记实验开始/结束。"
+            "Remote labeling ready: single click marks FOG; double click starts/ends experiment."
         )
 
     def _toggle_remote_fog_label(self, pc_ts: float, key_name: str, key_code: Optional[int]):
@@ -1722,7 +1855,7 @@ class Page1Widget(QWidget):
         self._append_remote_fog_event("fog_start", pc_ts, key_name, key_code, interval_index)
         self._append_session_event("remote_fog_start", pc_ts)
         self._update_remote_fog_label()
-        self.log_message(f"FOG 开始 #{interval_index}: {self._relative_timestamp(pc_ts):.3f}s")
+        self.log_message(f"FOG 开始 #{interval_index}: {self._event_sync_timestamp(pc_ts):.3f}s")
 
     def _end_remote_fog_label(self, pc_ts: float, key_name: str = "", key_code: Optional[int] = None, event_type: str = "fog_end"):
         if self.remote_fog_start_pc_ts is None:
@@ -1732,8 +1865,8 @@ class Page1Widget(QWidget):
 
         interval_index = self.remote_fog_interval_count + 1
         start_pc_ts = self.remote_fog_start_pc_ts
-        start_rel = self._relative_timestamp(start_pc_ts)
-        end_rel = max(start_rel, self._relative_timestamp(pc_ts))
+        start_rel = self._event_sync_timestamp(start_pc_ts)
+        end_rel = max(start_rel, self._event_sync_timestamp(pc_ts))
         duration_s = end_rel - start_rel
         end_key = self._remote_key_text(key_name, key_code)
 
@@ -1753,10 +1886,11 @@ class Page1Widget(QWidget):
             return
         with open(self.remote_fog_events_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
+            sync_ts = self._event_sync_timestamp(pc_ts)
             writer.writerow([
                 event_type,
-                f"{self._relative_timestamp(pc_ts):.6f}",
-                f"{pc_ts:.6f}",
+                self._format_event_world_time(pc_ts),
+                f"{sync_ts:.6f}",
                 key_name,
                 "" if key_code is None else key_code,
                 interval_index,
@@ -1779,19 +1913,23 @@ class Page1Widget(QWidget):
             writer = csv.writer(f)
             writer.writerow([
                 interval_index,
+                self._format_event_world_time(start_pc_ts),
+                self._format_event_world_time(end_pc_ts),
                 f"{start_rel:.6f}",
                 f"{end_rel:.6f}",
                 f"{duration_s:.6f}",
-                f"{start_pc_ts:.6f}",
-                f"{end_pc_ts:.6f}",
                 start_key,
                 end_key,
             ])
 
-    def _relative_timestamp(self, pc_ts: float) -> float:
+    def _event_sync_timestamp(self, pc_ts: float) -> float:
         if self.session_start_ts is None:
             return 0.0
         return max(0.0, pc_ts - self.session_start_ts)
+
+    @staticmethod
+    def _format_event_world_time(pc_ts: float) -> str:
+        return WtMultiImuUdpRecorder._format_world_time(pc_ts)
 
     @staticmethod
     def _remote_key_text(key_name: str, key_code: Optional[int]) -> str:
@@ -1914,7 +2052,7 @@ class Page1Widget(QWidget):
         elif self.remote_pair_status.upper() == "OK":
             color = "#a66a00"
             input_status = self.remote_input_status or "unknown"
-            text = f"连接状态：未连接/已配对 ({self.remote_device_name}, HID: {input_status})"
+            text = f"连接状态：未连接，已配对 ({self.remote_device_name}, HID: {input_status})"
         else:
             color = "#b00020"
             text = f"连接状态：未连接 ({self.remote_device_name})"
@@ -1942,7 +2080,7 @@ class Page1Widget(QWidget):
             )
             color = "#8a6d00"
         elif self.remote_fog_active and self.remote_fog_start_pc_ts is not None:
-            text = f"FOG label: active since {self._relative_timestamp(self.remote_fog_start_pc_ts):.3f}s; next click ends FOG"
+            text = f"FOG label: active since {self._event_sync_timestamp(self.remote_fog_start_pc_ts):.3f}s; next click ends FOG"
             color = "#b00020"
         else:
             text = f"FOG label: ready; intervals saved {self.remote_fog_interval_count}; next click starts FOG"
@@ -1961,7 +2099,7 @@ class Page1Widget(QWidget):
         elif self.remote_experiment_active and self.remote_experiment_start_pc_ts is not None:
             text = (
                 "Experiment: active since "
-                f"{self._relative_timestamp(self.remote_experiment_start_pc_ts):.3f}s; double-click ends"
+                f"{self._event_sync_timestamp(self.remote_experiment_start_pc_ts):.3f}s; double-click ends"
             )
             color = "#138a36"
         elif self.remote_experiment_interval_count:
@@ -2301,17 +2439,17 @@ class Page1Widget(QWidget):
         unparsed_packets = self.imu_recorder.unparsed_packet_total()
         if raw_packets == 0:
             self.log_message(
-                "WT IMU诊断：监听器已启动，但没有收到任何UDP数据。"
-                "这不是程序崩溃；请确认IMU发送目标为当前WLAN IP的1399端口，"
-                "并检查FOG是否为Public网络、防火墙是否允许UDP 1399入站。"
+                "WT IMU 诊断：监听器已启动，但未收到 UDP 数据。"
+                "请确认 IMU 目标 IP 为当前 WLAN IPv4，目标端口为 1399。"
+                "同时检查 FOG 网络类型和 Windows 防火墙入站规则。"
             )
         elif unparsed_packets:
             self.log_message(
-                f"WT IMU诊断：已收到{raw_packets}个UDP包，但没有匹配到配置的IMU ID。"
-                "请检查WT IMU设备ID和数据包格式。"
+                f"WT IMU 诊断：已收到 {raw_packets} 个 UDP 包，但未匹配配置的 IMU ID。"
+                "请检查 WT IMU 设备 ID 和数据包格式。"
             )
         else:
-            self.log_message("WT IMU诊断：暂未发现在线IMU，请等待数据或再次刷新。")
+            self.log_message("WT IMU 诊断：暂未发现在线 IMU，请等待数据或再次刷新。")
 
     def refresh_video_devices(self):
         if self.recording:
@@ -2430,7 +2568,6 @@ class Page1Widget(QWidget):
                 "task_type",
                 "imu_index",
                 "device_id",
-                "pc_timestamp",
                 "packet_count",
                 "acc_x",
                 "acc_y",
@@ -2448,7 +2585,7 @@ class Page1Widget(QWidget):
                 "battery_percent",
                 "rssi",
             ])
-            recorded_at = datetime.now().isoformat(timespec="seconds")
+            recorded_at = datetime.now().isoformat(timespec="milliseconds")
             for sample in samples:
                 acc = self._format_numeric_triplet(sample.get("acc_csv", sample.get("acc", ["", "", ""])))
                 gyr = self._format_numeric_triplet(sample.get("gyr_csv", sample.get("gyr", ["", "", ""])))
@@ -2460,7 +2597,6 @@ class Page1Widget(QWidget):
                     task_type,
                     sample.get("imu_index", ""),
                     sample.get("device_id", ""),
-                    f"{float(sample.get('timestamp', 0.0)):.6f}",
                     sample.get("count", ""),
                     *acc,
                     *gyr,
@@ -2482,7 +2618,7 @@ class Page1Widget(QWidget):
 
     @staticmethod
     def _safe_filename(value: str) -> str:
-        safe = "".join(ch if ch.isalnum() or ch in ("_", "-", "°") else "_" for ch in value.strip())
+        safe = "".join(ch if ch.isalnum() or ch in ("_", "-", "掳") else "_" for ch in value.strip())
         return safe or "unknown"
     @staticmethod
     def _format_numeric_value(value, decimals: int = 3) -> str:
@@ -2608,7 +2744,7 @@ class Page1Widget(QWidget):
         video_channel_count = self._enabled_usb_camera_count() + (len(self.D435I_WIDGET_INDICES) if self._d435i_recording_enabled() else 0)
         self.log_message(f"采集已开始：{self.task_type_combo.currentText()}，5 个 IMU 与 {video_channel_count} 路视频已进入同步记录。")
         self.log_message(f"会话：{os.path.basename(self.session_dir)}")
-        self.log_message("等待遥控双击标记实验开始。")
+        self.log_message("等待遥控器双击标记实验开始。")
 
     def stop_collection(self):
         if not self.recording:
@@ -2666,12 +2802,27 @@ class Page1Widget(QWidget):
             "subject": subject,
             "task_type": self.task_type_combo.currentText(),
             "session_start_pc_timestamp": f"{session_start_ts:.6f}",
-            "timestamp_zero": "All CSV pc_timestamp values in this session are relative to session_start_pc_timestamp.",
+            "timestamp_zero": "Use sync_timestamp as the canonical session-relative time axis.",
+            "timebase": {
+                "canonical_column": "sync_timestamp",
+                "unit": "seconds",
+                "zero": "session_start_pc_timestamp",
+                "source": "WT IMU device sampling clock, anchored to the first received sample of each IMU during the recording.",
+                "expected_wt_sample_period_ms": WtMultiImuUdpRecorder.EXPECTED_SAMPLE_PERIOD_MS,
+                "note": "sync_timestamp is reconstructed from each IMU device clock and theoretical sample period. Diagnostic receive/device clock columns are intentionally omitted from imu.csv.",
+            },
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "imu": {
                 "file": "imu.csv",
                 "ports": ports,
                 "device_ids": WtMultiImuUdpRecorder.DEVICE_IDS,
+                "time_columns": {
+                    "world_time": "Local wall-clock time formatted as HH:MM:SS:mmm, derived from session_start_pc_timestamp + sync_timestamp.",
+                    "sync_timestamp": "Canonical acquisition timestamp reconstructed from WT device clock and theoretical sample period.",
+                    "sample_counter": "Theoretical per-IMU sampling position; it jumps when samples are missing.",
+                    "dropped_samples_since_previous": "Estimated missing samples between the previous received sample and this row.",
+                    "cumulative_dropped_samples": "Estimated cumulative missing samples for this IMU during the recording.",
+                },
             },
             "usb_cameras": usb_cameras,
             "d435i": {
@@ -2683,14 +2834,14 @@ class Page1Widget(QWidget):
             "remote_fog_labels": {
                 "events_file": "remote_fog_events.csv",
                 "intervals_file": "remote_fog_intervals.csv",
-                "timestamp_zero": "Relative timestamps use session_start_pc_timestamp.",
+                "timestamp_zero": "sync_timestamp uses session_start_pc_timestamp.",
                 "single_click": "FOG start/end after the 1.0s double-click window expires.",
                 "double_click_events": ["experiment_start", "experiment_end", "experiment_end_auto_stop"],
                 "double_click_window_s": self.REMOTE_DOUBLE_CLICK_WINDOW_MS / 1000.0,
             },
             "sync": {
                 "file": "session_sync.csv",
-                "timestamp_zero": "Relative timestamps use session_start_pc_timestamp.",
+                "timestamp_zero": "sync_timestamp uses session_start_pc_timestamp.",
                 "required_devices": [
                     *(
                         f"camera{idx + 1}"
@@ -2712,11 +2863,12 @@ class Page1Widget(QWidget):
         path = os.path.join(self.session_dir, "session_events.csv")
         exists = os.path.exists(path)
         start_ts = self.session_start_ts if self.session_start_ts is not None else pc_ts
+        sync_ts = pc_ts - start_ts
         with open(path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if not exists:
-                writer.writerow(["event", "pc_timestamp", "relative_timestamp"])
-            writer.writerow([event, f"{pc_ts:.6f}", f"{pc_ts - start_ts:.6f}"])
+                writer.writerow(["event", "world_time", "sync_timestamp"])
+            writer.writerow([event, self._format_event_world_time(pc_ts), f"{sync_ts:.6f}"])
 
     def _append_sync_event(self, device: str, event: str, pc_ts: float, detail: str = ""):
         if not self.session_dir:
@@ -2724,11 +2876,12 @@ class Page1Widget(QWidget):
         path = os.path.join(self.session_dir, "session_sync.csv")
         exists = os.path.exists(path)
         start_ts = self.session_start_ts if self.session_start_ts is not None else pc_ts
+        sync_ts = pc_ts - start_ts
         with open(path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if not exists:
-                writer.writerow(["device", "event", "pc_timestamp", "relative_timestamp", "detail"])
-            writer.writerow([device, event, f"{pc_ts:.6f}", f"{pc_ts - start_ts:.6f}", detail])
+                writer.writerow(["device", "event", "world_time", "sync_timestamp", "detail"])
+            writer.writerow([device, event, self._format_event_world_time(pc_ts), f"{sync_ts:.6f}", detail])
 
     def _start_camera_recording(self):
         for idx, recorder in enumerate(self.recorders[:self.USB_CAMERA_COUNT], start=1):

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#B8C4D6"/></marker>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#CBD5E1" flood-opacity=".65"/></filter>
+</defs>
+<rect width="100%" height="100%" fill="#F8FAFC"/>
+<text x="40" y="48" font-family="Microsoft YaHei, SimHei, Arial" font-size="28" fill="#17202A" font-weight="900" text-anchor="start">UpStudio FOG Tool 系统架构</text>
+<text x="40" y="78" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#5D6D7E" font-weight="400" text-anchor="start">多源硬件采集 + 同步记录 + 后处理标注导出</text>
+<rect x="45" y="125" width="220" height="72" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="155.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">4 路 USB Camera</text>
+<text x="155.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">Qt Multimedia 预览/录制</text>
+<text x="155.0" y="211" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">camera1-4.mp4</text>
+<line x1="265" y1="161" x2="345" y2="265" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="45" y="230" width="220" height="72" rx="8" fill="white" stroke="#00A7C7" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="155.0" y="262" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#00A7C7" font-weight="800" text-anchor="middle">Intel</text>
+<text x="155.0" y="280" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#00A7C7" font-weight="800" text-anchor="middle">RealSense</text>
+<text x="155.0" y="298" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#00A7C7" font-weight="800" text-anchor="middle">D435i</text>
+<text x="155.0" y="300" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">RGB / Stereo / depth</text>
+<text x="155.0" y="316" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">raw / frame timestamps</text>
+<line x1="265" y1="266" x2="345" y2="265" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="45" y="335" width="220" height="72" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="155.0" y="367" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">5 个 WT IMU</text>
+<text x="155.0" y="405" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">UDP 接收 9轴/角度/磁场/电量数据</text>
+<line x1="265" y1="371" x2="345" y2="265" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="45" y="440" width="220" height="72" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="155.0" y="472" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">蓝牙遥控器</text>
+<text x="155.0" y="510" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">单击 FOG，双击实验开始/结束</text>
+<line x1="265" y1="476" x2="345" y2="265" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="345" y="205" width="250" height="135" rx="8" fill="white" stroke="#7C3AED" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="470.0" y="237" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#7C3AED" font-weight="800" text-anchor="middle">Page1 采集控制</text>
+<text x="470.0" y="275" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">设备预检、实时预览、同步采集、事件记录、佩戴基线、角度置零</text>
+<line x1="595" y1="272" x2="670" y2="272" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="670" y="168" width="250" height="210" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="795.0" y="200" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">Session 数据包</text>
+<text x="795.0" y="238" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">metadata / events / sync</text>
+<text x="795.0" y="254" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">/ imu.csv / camera1-4.mp4</text>
+<text x="795.0" y="270" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">/ D435i/RGB,Stereo,frames</text>
+<line x1="920" y1="272" x2="995" y2="272" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="995" y="205" width="250" height="135" rx="8" fill="white" stroke="#E45757" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1120.0" y="237" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#E45757" font-weight="800" text-anchor="middle">Page2 标注导出</text>
+<text x="1120.0" y="275" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">6 路视频同步回放、FOG</text>
+<text x="1120.0" y="291" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">区间精修、二/三分类标签、导出 labeled</text>
+<text x="1120.0" y="307" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">CSV</text>
+<rect x="356" y="390" width="170" height="34" rx="17.0" fill="#7C3AED"/>
+<text x="441.0" y="413.0" font-family="Microsoft YaHei, SimHei, Arial" font-size="15" fill="white" font-weight="800" text-anchor="middle">采集前设备预检</text>
+<rect x="710" y="390" width="170" height="34" rx="17.0" fill="#2F6BFF"/>
+<text x="795.0" y="413.0" font-family="Microsoft YaHei, SimHei, Arial" font-size="15" fill="white" font-weight="800" text-anchor="middle">统一时间零点</text>
+<rect x="1032" y="390" width="170" height="34" rx="17.0" fill="#E45757"/>
+<text x="1117.0" y="413.0" font-family="Microsoft YaHei, SimHei, Arial" font-size="15" fill="white" font-weight="800" text-anchor="middle">标签可追溯导出</text>
+</svg>

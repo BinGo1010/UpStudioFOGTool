@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>UpStudio FOG Tool 工作量汇报</title>
+<style>
+body { margin: 0; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; color: #17202A; background: #E5E7EB; }
+.slide { width: 1180px; min-height: 720px; margin: 28px auto; padding: 44px 56px; background: #fff; box-shadow: 0 10px 28px rgba(15,23,42,.18); box-sizing: border-box; page-break-after: always; }
+h1 { margin: 0 0 14px; font-size: 40px; }
+h2 { margin: 0 0 22px; font-size: 30px; }
+p, li { font-size: 22px; line-height: 1.55; }
+.small { color: #5D6D7E; font-size: 18px; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin: 30px 0; }
+.card { border: 1px solid #CBD5E1; border-radius: 8px; padding: 20px; background: #F8FAFC; }
+.num { font-size: 38px; color: #2F6BFF; font-weight: 800; }
+img { max-width: 100%; display: block; margin: 20px auto 0; }
+@media print { body { background: #fff; } .slide { margin: 0; box-shadow: none; width: 100%; min-height: 0; } }
+</style>
+</head>
+<body>
+<section class="slide"><h1>UpStudio FOG Tool 工作量汇报</h1><p>面向下肢外骨骼/FOG 实验的多源同步采集与标注上位机。</p><div class="grid"><div class="card"><div class="num">4</div><p>USB Camera</p></div><div class="card"><div class="num">D435i</div><p>RGB / Stereo / depth</p></div><div class="card"><div class="num">5</div><p>WT IMU</p></div><div class="card"><div class="num">6</div><p>视频同步标注路数</p></div></div><p class="small">生成时间：2026-07-02 17:20</p></section>
+<section class="slide"><h2>1. 系统架构</h2><p>采集端、数据账本和标注端已经形成闭环。</p><img src="images/01_system_architecture.svg"></section>
+<section class="slide"><h2>2. 工程工作量量化</h2><p>核心 Python 代码 3988 行，有效代码 3622 行，8 个类，187 个函数/方法。</p><img src="images/04_workload_metrics.svg"></section>
+<section class="slide"><h2>3. 采集端工作流</h2><p>统一时间零点，多线程/队列写盘，遥控器标签进入同一 session。</p><img src="images/02_acquisition_pipeline.svg"></section>
+<section class="slide"><h2>4. 标注端工作流</h2><p>6 路视频同步回放，FOG 标签精修后导出到 IMU 样本级标签。</p><img src="images/03_annotation_pipeline.svg"></section>
+<section class="slide"><h2>5. 数据产物</h2><p>每次实验形成完整 session 文件夹，方便追溯、复查和建模。</p><img src="images/05_session_artifacts.svg"></section>
+<section class="slide"><h2>6. 界面组织</h2><p>Page1 面向采集现场，Page2 面向离线标注；USB 与 D435i 视频已分页。</p><img src="images/06_ui_layout.svg"></section>
+<section class="slide"><h2>7. 汇报结论</h2><ul><li>多源同步采集、标签和导出流程已打通。</li><li>session metadata/events/sync 保证数据链路可追溯。</li><li>支持 exe 打包，具备在实验电脑部署的交付形态。</li><li>下一步建议重点做长时长稳定性和 IMU 丢包统计。</li></ul></section>
+</body>
+</html>

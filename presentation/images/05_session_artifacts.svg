@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#B8C4D6"/></marker>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#CBD5E1" flood-opacity=".65"/></filter>
+</defs>
+<rect width="100%" height="100%" fill="#F8FAFC"/>
+<text x="40" y="48" font-family="Microsoft YaHei, SimHei, Arial" font-size="28" fill="#17202A" font-weight="900" text-anchor="start">数据产物与可追溯性</text>
+<text x="40" y="78" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#5D6D7E" font-weight="400" text-anchor="start">一次实验输出一个 session 文件夹，原始数据、同步事件与人工标签分层保存。</text>
+<rect x="70" y="125" width="340" height="68" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="240.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">session_metadata.json</text>
+<text x="240.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">实验配置、设备清单、启用/跳过通道</text>
+<rect x="460" y="125" width="340" height="68" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="630.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">session_events.csv</text>
+<text x="630.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">采集流程事件</text>
+<rect x="850" y="125" width="340" height="68" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1020.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">session_sync.csv</text>
+<text x="1020.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">各设备开始/停止时间</text>
+<rect x="70" y="220" width="340" height="68" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="240.0" y="252" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">imu.csv</text>
+<text x="240.0" y="290" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">5 路 IMU 原始时序数据</text>
+<rect x="460" y="220" width="340" height="68" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="630.0" y="252" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">camera1-4.mp4</text>
+<text x="630.0" y="290" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">USB 视频，按启用通道生成</text>
+<rect x="850" y="220" width="340" height="68" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1020.0" y="252" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">D435i/</text>
+<text x="1020.0" y="290" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">RGB.mp4 / Stereo.mp4 / frames.csv</text>
+<text x="1020.0" y="306" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">/ metadata.json / depth raw</text>
+<rect x="70" y="315" width="340" height="68" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="240.0" y="347" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">remote_fog_events.csv</text>
+<text x="240.0" y="385" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">遥控器实验与 FOG 事件</text>
+<rect x="460" y="315" width="340" height="68" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="630.0" y="347" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">remote_fog_intervals.csv</text>
+<text x="630.0" y="385" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">遥控器粗 FOG 区间</text>
+<rect x="850" y="315" width="340" height="68" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1020.0" y="347" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">baselines/</text>
+<text x="1020.0" y="385" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">实验开始自动保存佩戴基线</text>
+<rect x="70" y="410" width="340" height="68" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="240.0" y="442" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">imu_labeled.csv</text>
+<text x="240.0" y="480" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">标注后 IMU 数据</text>
+<rect x="460" y="410" width="340" height="68" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="630.0" y="442" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">time_labeled.csv</text>
+<text x="630.0" y="480" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">关键时间点标签</text>
+<rect x="850" y="410" width="340" height="68" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1020.0" y="442" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">fog_intervals_edited.csv</text>
+<text x="1020.0" y="480" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">人工修正 FOG 区间</text>
+</svg>

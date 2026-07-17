@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#B8C4D6"/></marker>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#CBD5E1" flood-opacity=".65"/></filter>
+</defs>
+<rect width="100%" height="100%" fill="#F8FAFC"/>
+<text x="40" y="48" font-family="Microsoft YaHei, SimHei, Arial" font-size="28" fill="#17202A" font-weight="900" text-anchor="start">采集端工作流：从预检到可追溯数据落盘</text>
+<rect x="55" y="125" width="200" height="115" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="155.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">设备预检</text>
+<text x="155.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">IMU / USB / D435i /</text>
+<text x="155.0" y="211" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">蓝牙遥控器在线检查；USB</text>
+<text x="155.0" y="227" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">可按通道选择不使用</text>
+<line x1="255" y1="182" x2="293" y2="182" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="295" y="125" width="200" height="115" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="395.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">统一时间零点</text>
+<text x="395.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">写入 recording_zero，所有</text>
+<text x="395.0" y="211" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">CSV 时间戳相对</text>
+<text x="395.0" y="227" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">session_start</text>
+<line x1="495" y1="182" x2="533" y2="182" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="535" y="125" width="200" height="115" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="635.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">并行采集</text>
+<text x="635.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">IMU UDP 队列写盘；USB</text>
+<text x="635.0" y="211" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">QMediaRecorder；D435i</text>
+<text x="635.0" y="227" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">独立线程与磁盘队列</text>
+<line x1="735" y1="182" x2="773" y2="182" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="775" y="125" width="200" height="115" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="875.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">遥控标注</text>
+<text x="875.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">单击 FOG</text>
+<text x="875.0" y="211" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">起止；双击实验起止；实验开始自动保存佩戴基线</text>
+<line x1="975" y1="182" x2="1013" y2="182" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="1015" y="125" width="200" height="115" rx="8" fill="white" stroke="#B8C4D6" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1115.0" y="157" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#17202A" font-weight="800" text-anchor="middle">同步账本</text>
+<text x="1115.0" y="195" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">session_events.csv +</text>
+<text x="1115.0" y="211" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">session_sync.csv</text>
+<text x="1115.0" y="227" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">记录每路设备开始/停止事件</text>
+<rect x="110" y="310" width="320" height="56" rx="8" fill="white" stroke="#10A66A" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="270.0" y="342" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#10A66A" font-weight="800" text-anchor="middle">IMU 数据流</text>
+<text x="470" y="333" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#17202A" font-weight="600" text-anchor="start">5 路 WT IMU UDP → imu.csv</text>
+<text x="470" y="353" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#17202A" font-weight="600" text-anchor="start">实时表格 + 曲线预览</text>
+<line x1="430" y1="338" x2="455" y2="338" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="110" y="388" width="320" height="56" rx="8" fill="white" stroke="#2F6BFF" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="270.0" y="420" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#2F6BFF" font-weight="800" text-anchor="middle">视频数据流</text>
+<text x="470" y="411" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#17202A" font-weight="600" text-anchor="start">4 路 USB MP4 + D435i RGB/Stereo/depth</text>
+<text x="470" y="431" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#17202A" font-weight="600" text-anchor="start">USB / D435i 分页浏览</text>
+<line x1="430" y1="416" x2="455" y2="416" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="110" y="466" width="320" height="56" rx="8" fill="white" stroke="#F59E0B" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="270.0" y="498" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#F59E0B" font-weight="800" text-anchor="middle">事件数据流</text>
+<text x="470" y="489" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#17202A" font-weight="600" text-anchor="start">remote_fog_events / intervals</text>
+<text x="470" y="509" font-family="Microsoft YaHei, SimHei, Arial" font-size="16" fill="#17202A" font-weight="600" text-anchor="start">experiment_start/end 与 FOG start/end</text>
+<line x1="430" y1="494" x2="455" y2="494" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+<rect x="850" y="345" width="310" height="125" rx="8" fill="white" stroke="#7C3AED" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1005.0" y="377" font-family="Microsoft YaHei, SimHei, Arial" font-size="18" fill="#7C3AED" font-weight="800" text-anchor="middle">最终 Session 文件夹</text>
+<text x="1005.0" y="415" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">原始数据、同步事件、标签事件、基线文件和 D435i</text>
+<text x="1005.0" y="431" font-family="Microsoft YaHei, SimHei, Arial" font-size="13" fill="#5D6D7E" font-weight="400" text-anchor="middle">元数据集中保存</text>
+<line x1="760" y1="410" x2="850" y2="410" stroke="#B8C4D6" stroke-width="2.2" marker-end="url(#arrow)"/>
+</svg>
