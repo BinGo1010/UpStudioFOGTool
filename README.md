@@ -1,6 +1,6 @@
 # UpStudio FOG Data Tool
 
-UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位机工具，用于同步采集 USB 相机、Intel RealSense D435i、WT 系列 IMU 以及蓝牙遥控器标签数据，并提供视频回放与 FOG 标签精修导出功能。
+UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位机工具，用于同步采集 USB 相机、Intel RealSense D435i、WT 系列 IMU、8 路低频 EMG、3 路 EEG 以及蓝牙遥控器标签数据，并提供视频回放与 FOG 标签精修导出功能。
 
 ## 主要功能
 
@@ -8,6 +8,7 @@ UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位
   - 采集 4 路 USB 相机视频。
   - 可选采集 Intel RealSense D435i RGB、Stereo、depth raw 及相关帧时间信息。
   - 通过 UDP 接收 5 个 WT IMU 数据。
+  - 通过 UDP 接收并显示 8 路低频 EMG（`000001`、`000002`）和 3 路 EEG（`000003`）。
   - 检查相机、IMU、D435i、蓝牙遥控器连接状态。
   - 记录佩戴基线。
   - 对在线 IMU 执行“角度置零”。
@@ -18,7 +19,7 @@ UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位
   - 加载蓝牙遥控器生成的粗标签。
   - 根据视频手动修改 FOG 开始/结束时间。
   - 在时间轴和表格中显示实验开始/结束时间。
-  - 导出带标签的 IMU 数据和关键时间标签文件。
+  - 流式导出带标签的 IMU、EMG、EEG 数据和关键时间标签文件。
 
 ## 设备要求
 
@@ -26,6 +27,7 @@ UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位
 - Python 环境，当前开发调试环境为 Anaconda `video` 环境，Python 3.10.20。
 - 4 个 USB 相机。
 - 5 个 WT IMU，使用 UDP 发送数据到上位机。
+- 2 个四通道低频 EMG 设备（序列号 `000001`、`000002`）和 1 个三通道 EEG 设备（序列号 `000003`）。
 - Intel RealSense D435i，可在界面中选择是否启用。
 - 蓝牙 LE 单按钮遥控器，连接到 Windows 后按键映射为音量键。
 
@@ -35,10 +37,8 @@ UpStudio FOG Data Tool 是一个基于 PyQt6 的下肢外骨骼/FOG 实验上位
 
 ```powershell
 conda activate video
-python -m pip install PyQt6==6.9.1 pyqtgraph numpy opencv-python pyrealsense2 pyinstaller
+python -m pip install .
 ```
-
-如果使用 `pyproject.toml` 管理依赖，请确认其中的 Python 版本声明与当前环境一致。
 
 ## 启动程序
 
@@ -49,21 +49,25 @@ python main.py
 
 程序入口为 `main.py`。启动后包含两个页面：
 
-- `Page1 采集`：设备检查、数据采集、蓝牙遥控器标签、IMU 操作。
+- `Page1 采集`：设备检查、IMU/EMG/EEG/视频采集、双生理信号子框、蓝牙遥控器标签和 IMU 操作。
 - `Page2 标注`：视频回放、标签修正、标签文件生成。
 
 ## 采集前准备
 
 1. 确认 5 个 WT IMU 与电脑位于同一 Wi-Fi 网络。
 2. 将 IMU 的 UDP 目标地址设置为电脑当前 IPv4 地址，目标端口为 `1399`。
-3. 确认 Windows 防火墙允许当前 Python 程序接收 UDP 数据。
-4. 连接 4 个 USB 相机。
-5. 如需 D435i 数据，在界面中勾选“开启 D435i 视频采集”，并确认 D435i 已连接。
-6. 将蓝牙遥控器连接到 Windows，并在蓝牙遥控器框内刷新连接状态。
+3. 确认三台 EMG/EEG 设备与电脑位于同一网络。程序默认监听数据端口 `30300`、设备信息端口 `30301`，并向 `30200` 自动广播接收地址。
+4. 关闭独立的 `emg_program`，避免它与本程序争用 UDP `30300/30301`。
+5. 确认 Windows 防火墙允许当前 Python 程序接收 UDP 数据。
+6. 连接 4 个 USB 相机。
+7. 如需 D435i 数据，在界面中勾选“开启 D435i 视频采集”，并确认 D435i 已连接。
+8. 将蓝牙遥控器连接到 Windows，并在蓝牙遥控器框内刷新连接状态。
 
 点击“开始采集”前，程序会对关键设备做预检：
 
 - 5 个 IMU 需要在线。
+- 2 个 EMG 和 1 个 EEG 设备需要在线。
+- 11 个 EMG/EEG 通道都需要在最近 3 秒内收到有效数据帧。
 - 4 个 USB 相机需要在线。
 - 若开启 D435i 视频采集，D435i 需要在线。
 - 蓝牙遥控器需要处于连接状态。
@@ -89,7 +93,7 @@ python main.py
 
 ## 数据输出
 
-每次采集会在数据目录下生成一个独立 session 文件夹。常见文件结构如下：
+每次采集会在数据目录下生成一个独立 session 文件夹。默认数据目录为 Windows“文档”下的 `UpStudioFOGTool/data`，与程序构建目录分离，也可在界面中修改。常见文件结构如下：
 
 ```text
 session/
@@ -97,6 +101,11 @@ session/
   session_events.csv
   session_sync.csv
   imu.csv
+  emg.csv
+  eeg.csv
+  imu_labeled.csv          标注导出后生成
+  emg_labeled.csv          标注导出后生成
+  eeg_labeled.csv          标注导出后生成
   camera1.mp4
   camera2.mp4
   camera3.mp4
@@ -115,6 +124,11 @@ session/
 说明：
 
 - `imu.csv`：WT IMU 原始采集数据，时间戳相对本次 session 开始时间。
+- `emg.csv`：8 路低频肌电原始值；`000001` 对应通道 1–4，`000002` 对应通道 5–8。
+- `eeg.csv`：`000003` 的 3 路脑电原始值。
+- 接收器严格按帧内序列号路由；未知序列号或序列号与信号类型不一致的帧会被拒绝，不会按来源 IP 猜测设备。
+- `emg.csv` 与 `eeg.csv` 按 PC 收包时间和 1000 Hz 理论采样间隔重建 `sync_timestamp`；正常接收时连续递增，遇到明显断连/重连时会重新锚定到重连包时间，使时间轴保留断连空洞。帧内序列号和设备时间戳仅用于内部路由/诊断，不写入 CSV。
+- 生理信号 CSV 字段依次为 `world_time`、`sync_timestamp`、`channel`、`value_uV`。
 - `camera1.mp4` 到 `camera4.mp4`：四路 USB 相机视频。
 - `D435i/`：仅在开启 D435i 视频采集时生成。
 - `session_events.csv`：采集流程事件。
@@ -136,8 +150,8 @@ session/
 
 导出文件：
 
-- `imu_labeled.csv`
-  - 在 `imu.csv` 基础上增加 `label` 列。
+- `imu_labeled.csv`、`emg_labeled.csv`、`eeg_labeled.csv`
+  - 分别在三个原始 CSV 基础上增加 `label` 列；导出采用逐行流式处理，不会一次性把长时间生理信号文件载入内存。
   - 标签含义：
     - `0`：normal
     - `1`：pre-fog
@@ -172,16 +186,31 @@ dist/UpStudioFOGTool/UpStudioFOGTool.exe
 
 迁移到其他 Windows 电脑时，请复制整个 `dist/UpStudioFOGTool` 文件夹，而不是只复制单个 exe。
 
+打包脚本会清理旧的 `dist/UpStudioFOGTool`。若检测到旧分发目录内存在 `data` 实验文件，脚本会主动取消构建；请先把数据移动到安全位置，切勿把实验数据长期保存在 `dist` 下。
+
+## 测试
+
+协议、序列号映射、起始边界裁剪和停止尾队列回归测试：
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+## 长时间采集提示
+
+EMG/EEG 采用便于追溯的长表 CSV，每秒约 11,000 行。按当前字段估算约为 45 MiB/分钟、2.7 GiB/小时，Excel 的单表行数上限也不适合直接打开长时间记录。正式实验建议选择空间充足的本地 SSD（避免实时写入 OneDrive/网盘同步目录），使用 Python、MATLAB、R 等工具按 `sync_timestamp` 和 `channel` 分组分析，并提前做足时长压力测试。
+
 ## 项目结构
 
 ```text
 main.py                  程序入口和主窗口
 page1.py                 采集界面、设备接收、数据保存、蓝牙遥控器标签
+biosignal.py             EMG/EEG UDP 协议、接收线程、保存与双子框波形组件
 page2.py                 视频回放、标签编辑、标签导出
 pyproject.toml           Python 项目依赖配置
 upstudio_fog_tool.spec   PyInstaller 打包配置
 build_exe.ps1            Windows 打包脚本
-data/                    默认实验数据目录
+tests/                   生理信号协议、边界与并发回归测试
 ```
 
 ## 常见问题
@@ -193,6 +222,13 @@ data/                    默认实验数据目录
 - 确认目标端口为 `1399`。
 - 确认没有其他程序占用 UDP `1399` 端口。
 - 确认 Windows 防火墙允许 Python 接收 UDP 数据。
+
+### EMG/EEG 无法连接
+
+- 确认三台设备序列号分别为 `000001`、`000002`、`000003`，且与电脑在同一局域网。
+- 确认独立 `emg_program` 已关闭；同一时刻只能有一个程序占用 UDP `30300/30301`。
+- 在“EMG / EEG 接收”框中确认端口为 `30300`，然后点击“重新监听”。
+- 确认 Windows 防火墙允许 UDP `30200`、`30300` 和 `30301`。
 
 ### D435i 无法采集
 

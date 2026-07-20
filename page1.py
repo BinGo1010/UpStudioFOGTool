@@ -44,6 +44,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from biosignal import BiosignalPanel, EmgEegUdpRecorder
+
 
 class OptimizedChannelPlot(QWidget):
     def __init__(self, channel_num, parent=None):
@@ -243,15 +245,10 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             self._writer_thread.start()
 
     def stop_recording(self):
+        self.request_stop_recording()
         writer_thread = None
         with self._writer_lock:
-            self._writer_running = False
             writer_thread = self._writer_thread
-            if writer_thread is not None:
-                try:
-                    self._write_queue.put(None, timeout=1.0)
-                except queue.Full:
-                    pass
         if writer_thread and writer_thread.is_alive():
             writer_thread.join(timeout=5.0)
         with self._writer_lock:
@@ -262,6 +259,22 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             self._csv_writer = None
             self._writer_thread = None
             self._recording_start_ts = None
+
+    def request_stop_recording(self) -> bool:
+        write_queue = None
+        with self._writer_lock:
+            writer_thread = self._writer_thread
+            write_queue = self._write_queue
+            if self._csv_file is None and writer_thread is None and self._recording_start_ts is None:
+                return False
+            self._writer_running = False
+            self._recording_start_ts = None
+        if writer_thread is not None and write_queue is not None:
+            try:
+                write_queue.put(None, timeout=1.0)
+            except queue.Full:
+                pass
+        return True
 
     def _write_loop(self):
         pending = 0
@@ -287,7 +300,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
                     pending = 0
                     last_flush = now
 
-            if should_stop:
+            if should_stop and self._write_queue.empty():
                 break
 
     def stop(self):
@@ -381,14 +394,22 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
                                 row["temperature_csv"],
                                 row["battery_percent"],
                             ])
+                queue_warnings = []
                 if csv_rows:
-                    for csv_row in csv_rows:
-                        try:
-                            self._write_queue.put_nowait(csv_row)
-                        except queue.Full:
-                            self._dropped_rows += 1
-                            if self._dropped_rows in (1, 100, 1000) or self._dropped_rows % 10000 == 0:
-                                self.error_occurred.emit(f"WT IMU CSV queue full, dropped rows={self._dropped_rows}")
+                    with self._writer_lock:
+                        writer_active = self._csv_writer is not None and self._recording_start_ts is not None
+                        if writer_active:
+                            for csv_row in csv_rows:
+                                try:
+                                    self._write_queue.put_nowait(csv_row)
+                                except queue.Full:
+                                    self._dropped_rows += 1
+                                    if self._dropped_rows in (1, 100, 1000) or self._dropped_rows % 10000 == 0:
+                                        queue_warnings.append(
+                                            f"WT IMU CSV queue full, dropped rows={self._dropped_rows}"
+                                        )
+                for warning in queue_warnings:
+                    self.error_occurred.emit(warning)
 
                 for row in rows:
                     imu_index = row["imu_index"]
@@ -829,8 +850,9 @@ class RealSenseD435iWorker(QtCore.QObject):
         save_depth_raw: bool = True,
     ):
         if cv2 is None:
-            self.error_occurred.emit("opencv-python not installed; RealSense video cannot be saved")
-            return
+            message = "opencv-python not installed; RealSense video cannot be saved"
+            self.error_occurred.emit(message)
+            raise RuntimeError(message)
         with self.lock:
             self.output_dir = output_dir
             self.depth_dir = os.path.join(output_dir, "depth_raw_npy")
@@ -856,6 +878,20 @@ class RealSenseD435iWorker(QtCore.QObject):
                 30.0,
                 (1280, 480),
             )
+            unopened_writers = [
+                name
+                for name, writer in (("RGB.mp4", self.rgb_writer), ("Stereo.mp4", self.stereo_writer))
+                if writer is None or not writer.isOpened()
+            ]
+            if unopened_writers:
+                for writer_name in ("rgb_writer", "stereo_writer"):
+                    writer = getattr(self, writer_name)
+                    if writer is not None:
+                        writer.release()
+                        setattr(self, writer_name, None)
+                self._writer_running = False
+                self._recording_start_ts = None
+                raise RuntimeError("D435i 视频文件无法创建：" + "、".join(unopened_writers))
             self.frames_file = open(os.path.join(output_dir, "frames.csv"), "w", newline="", encoding="utf-8")
             self.frames_writer = csv.writer(self.frames_file)
             self.frames_writer.writerow([
@@ -894,16 +930,10 @@ class RealSenseD435iWorker(QtCore.QObject):
             self.recording = True
 
     def stop_recording(self):
+        self.request_stop_recording()
         writer_thread = None
         with self.lock:
-            self.recording = False
-            self._writer_running = False
             writer_thread = self._writer_thread
-        if writer_thread is not None:
-            try:
-                self._write_queue.put(None, timeout=2.0)
-            except queue.Full:
-                pass
         if writer_thread and writer_thread.is_alive():
             writer_thread.join()
         with self.lock:
@@ -924,6 +954,22 @@ class RealSenseD435iWorker(QtCore.QObject):
                 self.imu_writer = None
             self._recording_start_ts = None
             self._writer_thread = None
+
+    def request_stop_recording(self) -> bool:
+        write_queue = None
+        with self.lock:
+            writer_thread = self._writer_thread
+            write_queue = self._write_queue
+            if not self.recording and writer_thread is None and self._recording_start_ts is None:
+                return False
+            self.recording = False
+            self._writer_running = False
+        if writer_thread is not None and write_queue is not None:
+            try:
+                write_queue.put(None, timeout=2.0)
+            except queue.Full:
+                pass
+        return True
 
     def _recording_write_loop(self):
         pending = 0
@@ -994,7 +1040,7 @@ class RealSenseD435iWorker(QtCore.QObject):
                 pending = 0
                 last_flush = now
 
-            if should_stop:
+            if should_stop and self._write_queue.empty():
                 break
 
     def _run(self):
@@ -1070,7 +1116,10 @@ class RealSenseD435iWorker(QtCore.QObject):
                         ir_right_frame.get_frame_number(),
                     )
                     try:
-                        self._write_queue.put_nowait(item)
+                        with self.lock:
+                            if not self.recording or self._recording_start_ts != start_ts:
+                                continue
+                            self._write_queue.put_nowait(item)
                     except queue.Full:
                         self._dropped_video_frames += 1
                         if self._dropped_video_frames in (1, 10, 100) or self._dropped_video_frames % 1000 == 0:
@@ -1136,7 +1185,10 @@ class RealSenseD435iWorker(QtCore.QObject):
             for source, frame_number, sensor_ts, x, y, z in motion_rows
         ])
         try:
-            self._write_queue.put_nowait(item)
+            with self.lock:
+                if not self.recording:
+                    return
+                self._write_queue.put_nowait(item)
         except queue.Full:
             self._dropped_motion_rows += len(motion_rows)
             if self._dropped_motion_rows in (1, 100, 1000) or self._dropped_motion_rows % 10000 == 0:
@@ -1333,6 +1385,12 @@ class Page1Widget(QWidget):
         self.imu_recorder.sample_received.connect(self._on_imu_sample)
         self.imu_recorder.error_occurred.connect(self.log_message)
         self.imu_recorder.command_status.connect(self.log_message)
+        self.biosignal_recorder = EmgEegUdpRecorder(self)
+        self.biosignal_recorder.sample_batch_received.connect(self._on_biosignal_batch)
+        self.biosignal_recorder.device_status_changed.connect(self._on_biosignal_device_status)
+        self.biosignal_recorder.listener_status_changed.connect(self._on_biosignal_listener_status)
+        self.biosignal_recorder.error_occurred.connect(self.log_message)
+        self.biosignal_recorder.recording_failed.connect(self._on_biosignal_recording_failed)
 
         self.cameras: List[Optional[QCamera]] = []
         self.capture_sessions: List[QMediaCaptureSession] = []
@@ -1349,6 +1407,21 @@ class Page1Widget(QWidget):
         self.imu_plot_channel_selects: List[QComboBox] = []
         self.port_spins: List[QSpinBox] = []
         self.imu_table: Optional[QTableWidget] = None
+        self.emg_panel: Optional[BiosignalPanel] = None
+        self.eeg_panel: Optional[BiosignalPanel] = None
+        self.biosignal_status_labels: Dict[str, QLabel] = {}
+        self.biosignal_wifi_ip_label: Optional[QLabel] = None
+        self.biosignal_listener_label: Optional[QLabel] = None
+        self.biosignal_port_spin: Optional[QSpinBox] = None
+        self.btn_refresh_biosignal: Optional[QPushButton] = None
+        self.biosignal_finalizing = False
+        self._shutting_down = False
+        self._biosignal_refresh_timer = QtCore.QTimer(self)
+        self._biosignal_refresh_timer.setSingleShot(True)
+        self._biosignal_refresh_timer.timeout.connect(self._restart_biosignal_listener)
+        self._biosignal_finalize_timer = QtCore.QTimer(self)
+        self._biosignal_finalize_timer.setInterval(1000)
+        self._biosignal_finalize_timer.timeout.connect(self._poll_biosignal_finalize)
         self._imu_refresh_generation = 0
         self.latest_imu_samples: Dict[int, dict] = {}
         self.remote_indicator_on = False
@@ -1394,7 +1467,7 @@ class Page1Widget(QWidget):
         self._start_remote_status_monitor()
 
     def activate_page(self):
-        self.log_message("Page14 ready. Connecting available cameras...")
+        self._shutting_down = False
         QtCore.QTimer.singleShot(0, self._start_capture_devices)
 
     def _start_capture_devices(self):
@@ -1403,13 +1476,42 @@ class Page1Widget(QWidget):
         self.realsense.start_preview()
         ports = list(dict.fromkeys(spin.value() for spin in self.port_spins))
         self.imu_recorder.start(ports)
+        biosignal_port = (
+            self.biosignal_port_spin.value()
+            if self.biosignal_port_spin is not None
+            else EmgEegUdpRecorder.DEFAULT_PORT
+        )
+        self.biosignal_recorder.start(biosignal_port)
 
     def deactivate_page(self):
         if self.recording:
-            return
+            return False
+        self._shutting_down = True
+        self._biosignal_refresh_timer.stop()
+        if self.biosignal_recorder.writer_pending:
+            self._biosignal_finalize_timer.stop()
+            self.biosignal_recorder.stop_recording(timeout_s=30.0)
+            if self.biosignal_recorder.writer_pending:
+                # Keep the window alive and resume polling instead of allowing
+                # Qt to destroy the recorder while experimental rows are open.
+                self._shutting_down = False
+                self.biosignal_finalizing = True
+                self._biosignal_finalize_timer.start()
+                self.log_message("EMG/EEG 数据仍在落盘；完成前暂不关闭程序。")
+                return False
+        self._biosignal_finalize_timer.stop()
         self.realsense.stop_preview()
         self._stop_usb_cameras()
         self.imu_recorder.stop()
+        self.biosignal_recorder.stop()
+        if self._remote_status_timer is not None:
+            self._remote_status_timer.stop()
+        if self._remote_status_process is not None:
+            if self._remote_status_process.state() != QtCore.QProcess.ProcessState.NotRunning:
+                self._remote_status_process.kill()
+                self._remote_status_process.waitForFinished(1000)
+            self._remote_status_process = None
+        return True
 
     def setup_ui(self):
         root = QVBoxLayout(self)
@@ -1423,6 +1525,7 @@ class Page1Widget(QWidget):
         left_panel.setSpacing(12)
 
         data_tabs = QtWidgets.QTabWidget()
+        self.data_tabs = data_tabs
         data_tabs.setStyleSheet(
             "QTabWidget::pane { border: 1px solid #E5E5EA; border-radius: 4px; } "
             "QTabBar::tab { font-size: 11px; font-weight: 600; padding: 6px 16px; } "
@@ -1444,13 +1547,6 @@ class Page1Widget(QWidget):
         imu_layout.addLayout(imu_plot_grid, 3)
 
         self.imu_table = QTableWidget(5, 16)
-        self.imu_table.setHorizontalHeaderLabels([
-            "IMU", "Port", "Status", "Packets",
-            "Acc X", "Acc Y", "Acc Z",
-            "Gyr X", "Gyr Y", "Gyr Z",
-            "Mag X", "Mag Y", "Mag Z",
-            "更新时间",
-        ])
         self.imu_table.setHorizontalHeaderLabels([
             "IMU", "Status", "Packets",
             "Acc X", "Acc Y", "Acc Z",
@@ -1489,6 +1585,27 @@ class Page1Widget(QWidget):
         imu_layout.addWidget(self.imu_table)
         imu_tab_layout.addWidget(imu_group)
         data_tabs.addTab(imu_tab, "IMU")
+
+        self.emg_panel = BiosignalPanel(
+            "子框 1 · 8 通道低频肌电（1000 Hz）",
+            [
+                "EMG CH1 · 000001/CH1", "EMG CH2 · 000001/CH2",
+                "EMG CH3 · 000001/CH3", "EMG CH4 · 000001/CH4",
+                "EMG CH5 · 000002/CH1", "EMG CH6 · 000002/CH2",
+                "EMG CH7 · 000002/CH3", "EMG CH8 · 000002/CH4",
+            ],
+            serials=("000001", "000002"),
+            columns=2,
+        )
+        data_tabs.addTab(self.emg_panel, "低频肌电 EMG")
+
+        self.eeg_panel = BiosignalPanel(
+            "子框 2 · 3 通道脑电（1000 Hz）",
+            ["EEG CH1 · 000003/CH1", "EEG CH2 · 000003/CH2", "EEG CH3 · 000003/CH3"],
+            serials=("000003",),
+            columns=3,
+        )
+        data_tabs.addTab(self.eeg_panel, "脑电 EEG")
 
         camera_tab = QWidget()
         camera_tab_layout = QVBoxLayout(camera_tab)
@@ -1598,7 +1715,13 @@ class Page1Widget(QWidget):
         name_row.addWidget(self.name_input, 1)
         name_row.addWidget(QLabel("任务"))
         name_row.addWidget(self.task_type_combo)
-        self.base_dir_input = QLineEdit(os.path.abspath("data"))
+        documents_dir = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.DocumentsLocation
+        )
+        if not documents_dir:
+            documents_dir = os.path.join(os.path.expanduser("~"), "Documents")
+        default_data_dir = os.path.join(documents_dir, "UpStudioFOGTool", "data")
+        self.base_dir_input = QLineEdit(os.path.abspath(default_data_dir))
         browse_btn = QPushButton("选择目录")
         browse_btn.clicked.connect(self.choose_base_dir)
         path_row = QHBoxLayout()
@@ -1638,6 +1761,33 @@ class Page1Widget(QWidget):
         control_layout.addWidget(self.btn_stop)
         control_layout.addLayout(depth_row)
         right_panel.addWidget(control_group)
+
+        biosignal_group = QGroupBox("EMG / EEG 接收")
+        biosignal_layout = QVBoxLayout(biosignal_group)
+        biosignal_port_row = QHBoxLayout()
+        biosignal_port_row.addWidget(QLabel("UDP 端口"))
+        self.biosignal_port_spin = QSpinBox()
+        self.biosignal_port_spin.setRange(1024, 65534)
+        self.biosignal_port_spin.setValue(EmgEegUdpRecorder.DEFAULT_PORT)
+        self.biosignal_port_spin.setToolTip("与 emg_program 默认配置一致；独立程序运行时会占用该端口。")
+        self.btn_refresh_biosignal = QPushButton("重新监听")
+        self.btn_refresh_biosignal.clicked.connect(self.refresh_biosignal_connection)
+        biosignal_port_row.addWidget(self.biosignal_port_spin, 1)
+        biosignal_port_row.addWidget(self.btn_refresh_biosignal)
+        biosignal_layout.addLayout(biosignal_port_row)
+        self.biosignal_wifi_ip_label = QLabel("当前 Wi-Fi 主机 IP 是：检测中")
+        self.biosignal_wifi_ip_label.setStyleSheet("color: #666; font-weight: 600;")
+        biosignal_layout.addWidget(self.biosignal_wifi_ip_label)
+        self._update_biosignal_wifi_ip_label()
+        self.biosignal_listener_label = QLabel("接收器：等待启动")
+        self.biosignal_listener_label.setStyleSheet("color: #777;")
+        biosignal_layout.addWidget(self.biosignal_listener_label)
+        for serial, name in (("000001", "EMG 1"), ("000002", "EMG 2"), ("000003", "EEG")):
+            label = QLabel(f"● {name} · {serial} · 等待数据")
+            label.setStyleSheet("color: #777;")
+            self.biosignal_status_labels[serial] = label
+            biosignal_layout.addWidget(label)
+        right_panel.addWidget(biosignal_group)
 
         remote_group = QGroupBox("蓝牙遥控器")
         remote_layout = QVBoxLayout(remote_group)
@@ -1700,10 +1850,11 @@ class Page1Widget(QWidget):
         imu_calib_layout.addWidget(btn_angle_zero)
         right_panel.addWidget(imu_calib_group)
 
-        log_group = QGroupBox("日志")
+        log_group = QGroupBox("操作日志")
         log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.document().setMaximumBlockCount(200)
         log_layout.addWidget(self.log_text)
         right_panel.addWidget(log_group, 1)
         main_row.addWidget(right_container)
@@ -1732,9 +1883,13 @@ class Page1Widget(QWidget):
             elapsed_ms = (pc_ts - float(first_click["pc_ts"])) * 1000.0
             if elapsed_ms <= self.REMOTE_DOUBLE_CLICK_WINDOW_MS:
                 self._clear_pending_remote_single_click()
-                self._handle_remote_double_click(first_click, click)
+                try:
+                    self._handle_remote_double_click(first_click, click)
+                except Exception as exc:
+                    self._handle_remote_label_write_failure(exc)
                 return
-            self._commit_pending_remote_single_click()
+            if not self._commit_pending_remote_single_click() or not self.recording:
+                return
 
         self._pending_remote_click = click
         self._remote_single_click_timer.start(self.REMOTE_DOUBLE_CLICK_WINDOW_MS)
@@ -1745,17 +1900,39 @@ class Page1Widget(QWidget):
             self._remote_single_click_timer.stop()
         self._pending_remote_click = None
 
-    def _commit_pending_remote_single_click(self):
+    def _commit_pending_remote_single_click(self, stop_on_failure: bool = True) -> bool:
         click = self._pending_remote_click
         self._clear_pending_remote_single_click()
         if not click or not self.recording:
             self._update_remote_fog_label()
+            return True
+        try:
+            self._toggle_remote_fog_label(
+                float(click["pc_ts"]),
+                str(click.get("key_name", "")),
+                click.get("key_code"),
+            )
+        except Exception as exc:
+            if stop_on_failure:
+                self._handle_remote_label_write_failure(exc)
+            else:
+                raise
+            return False
+        return True
+
+    def _handle_remote_label_write_failure(self, exc: Exception):
+        message = f"蓝牙遥控标签写入失败：{exc}"
+        self.log_message(message)
+        if not self.recording:
             return
-        self._toggle_remote_fog_label(
-            float(click["pc_ts"]),
-            str(click.get("key_name", "")),
-            click.get("key_code"),
-        )
+        try:
+            self.stop_collection()
+        finally:
+            QMessageBox.critical(
+                self,
+                "蓝牙标签写入失败",
+                "采集已停止，以避免视频、IMU 与生理信号标签不一致。\n\n" + message,
+            )
 
     def _handle_remote_double_click(self, first_click: dict, second_click: dict):
         event_ts = float(first_click["pc_ts"])
@@ -1837,9 +2014,6 @@ class Page1Widget(QWidget):
             ])
         self._update_remote_fog_label()
         self._update_remote_experiment_label()
-        self.log_message(
-            "Remote labeling ready: single click marks FOG; double click starts/ends experiment."
-        )
 
     def _toggle_remote_fog_label(self, pc_ts: float, key_name: str, key_code: Optional[int]):
         if self.remote_fog_active:
@@ -1895,6 +2069,12 @@ class Page1Widget(QWidget):
                 "" if key_code is None else key_code,
                 interval_index,
             ])
+        self._append_sync_event(
+            "bluetooth_remote",
+            event_type,
+            pc_ts,
+            self._remote_key_text(key_name, key_code),
+        )
 
     def _append_remote_fog_interval(
         self,
@@ -2362,6 +2542,31 @@ class Page1Widget(QWidget):
         if directory:
             self.base_dir_input.setText(directory)
 
+    def refresh_biosignal_connection(self):
+        if self.recording:
+            QMessageBox.warning(self, "重新监听 EMG/EEG", "当前正在采集，请先停止采集后再修改接收端口。")
+            return
+        self._update_biosignal_wifi_ip_label()
+        port = (
+            self.biosignal_port_spin.value()
+            if self.biosignal_port_spin is not None
+            else EmgEegUdpRecorder.DEFAULT_PORT
+        )
+        self.log_message(f"EMG/EEG 接收器已重新监听 UDP {port}。")
+        self.biosignal_recorder.stop()
+        self._biosignal_refresh_timer.start(150)
+
+    def _restart_biosignal_listener(self):
+        if self._shutting_down:
+            return
+        port = (
+            self.biosignal_port_spin.value()
+            if self.biosignal_port_spin is not None
+            else EmgEegUdpRecorder.DEFAULT_PORT
+        )
+        self._update_biosignal_wifi_ip_label()
+        self.biosignal_recorder.start(port)
+
     def refresh_imu_connection(self):
         if self.recording:
             QMessageBox.warning(
@@ -2374,15 +2579,11 @@ class Page1Widget(QWidget):
         ports = list(dict.fromkeys(spin.value() for spin in self.port_spins))
         self._imu_refresh_generation += 1
         refresh_generation = self._imu_refresh_generation
-        self.log_message(f"Refreshing WT IMU UDP listener on ports {ports}...")
-        local_ips = ", ".join(self._local_ipv4_addresses()) or "unknown"
-        self.log_message(f"Local IPv4 candidates for WT IMU target: {local_ips}; expected UDP port(s): {ports}")
-        self.log_message(self._wlan_status_summary())
+        self.log_message("IMU 连接已刷新，请观察状态是否变为 receiving。")
         self.imu_recorder.stop()
         self._reset_imu_table()
         QtCore.QTimer.singleShot(200, lambda: self.imu_recorder.start(ports))
         QtCore.QTimer.singleShot(5000, lambda: self._log_imu_refresh_diagnostics(refresh_generation))
-        self.log_message("If port 1399 still fails, close debug_wtimu_udp.py or any other running app using UDP 1399.")
 
     def _local_ipv4_addresses(self) -> List[str]:
         addresses = []
@@ -2425,6 +2626,36 @@ class Page1Widget(QWidget):
         name, category, ip = (output.splitlines()[0].split("|") + ["", "", ""])[:3]
         return f"WLAN diagnostic: SSID={name}, category={category}, IPv4={ip}, IMU target should use {ip}:1399"
 
+    def _current_wlan_ipv4(self) -> str:
+        command = (
+            "$ip = Get-NetIPAddress -InterfaceAlias 'WLAN' -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1; "
+            "if ($ip) { Write-Output $ip.IPAddress } else { Write-Output 'unknown' }"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=2,
+            )
+        except Exception:
+            return "unknown"
+        if result.returncode != 0:
+            return "unknown"
+        ip = result.stdout.strip().splitlines()[0] if result.stdout.strip() else "unknown"
+        return ip or "unknown"
+
+    def _update_biosignal_wifi_ip_label(self):
+        if self.biosignal_wifi_ip_label is None:
+            return
+        ip = self._current_wlan_ipv4()
+        self.biosignal_wifi_ip_label.setText(f"当前 Wi-Fi 主机 IP 是：{ip}")
+        color = "#138a36" if ip != "unknown" else "#b00020"
+        self.biosignal_wifi_ip_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+
     def _log_imu_refresh_diagnostics(self, refresh_generation: Optional[int] = None):
         if refresh_generation is not None and refresh_generation != self._imu_refresh_generation:
             return
@@ -2432,7 +2663,7 @@ class Page1Widget(QWidget):
             return
         online = self.imu_recorder.online_imu_indices()
         if online:
-            self.log_message("WT IMU online: " + ", ".join(f"IMU{i}" for i in online))
+            self.log_message("IMU 在线：" + "、".join(f"IMU{i}" for i in online))
             return
 
         raw_packets = self.imu_recorder.raw_packet_total()
@@ -2455,32 +2686,29 @@ class Page1Widget(QWidget):
         if self.recording:
             QMessageBox.warning(self, "刷新视频设备", "当前正在采集，请先停止采集后再刷新视频设备。")
             return
-        self.log_message("Refreshing video devices...")
         self.realsense.stop_preview()
         self._stop_usb_cameras()
         self.refresh_camera_devices()
         self.setup_cameras()
         self.realsense.start_preview()
-        self.log_message("Video devices refreshed.")
+        self.log_message("视频设备已刷新。")
 
     def refresh_usb_video_devices(self):
         if self.recording:
             QMessageBox.warning(self, "刷新 USB 视频设备", "当前正在采集，请先停止采集后再刷新 USB 视频设备。")
             return
-        self.log_message("Refreshing USB video devices...")
         self._stop_usb_cameras()
         self.refresh_camera_devices()
         self.setup_cameras()
-        self.log_message("USB video devices refreshed.")
+        self.log_message("USB 视频设备已刷新。")
 
     def refresh_d435i_video_devices(self):
         if self.recording:
             QMessageBox.warning(self, "刷新 D435i 视频设备", "当前正在采集，请先停止采集后再刷新 D435i 视频设备。")
             return
-        self.log_message("Refreshing D435i video devices...")
         self.realsense.stop_preview()
         self.realsense.start_preview()
-        self.log_message("D435i video devices refreshed.")
+        self.log_message("D435i 视频设备已刷新。")
 
     def _selected_command_imu_index(self) -> int:
         if self.imu_command_select is None:
@@ -2654,6 +2882,29 @@ class Page1Widget(QWidget):
         if missing_cameras:
             errors.append("相机未全部在线：" + "、".join(missing_cameras))
 
+        if not self.biosignal_recorder.running:
+            errors.append("EMG/EEG UDP 接收器未启动")
+        else:
+            online_biosignals = self.biosignal_recorder.online_serials()
+            biosignal_names = {
+                "000001": "EMG1(000001)",
+                "000002": "EMG2(000002)",
+                "000003": "EEG(000003)",
+            }
+            missing_biosignals = [
+                name for serial, name in biosignal_names.items() if serial not in online_biosignals
+            ]
+            if missing_biosignals:
+                errors.append("EMG/EEG 未全部在线：" + "、".join(missing_biosignals))
+
+            online_channels = self.biosignal_recorder.online_channel_indices()
+            channel_names = [*(f"EMG CH{i}" for i in range(1, 9)), *(f"EEG CH{i}" for i in range(1, 4))]
+            missing_channels = [
+                channel_names[index] for index in range(11) if index not in online_channels
+            ]
+            if missing_channels:
+                errors.append("EMG/EEG 通道无有效帧：" + "、".join(missing_channels))
+
         if not self._remote_ready():
             detail = self.remote_input_status or self.remote_pair_status or "unknown"
             errors.append(f"蓝牙遥控器未连接：{self.remote_device_name} ({detail})")
@@ -2690,26 +2941,76 @@ class Page1Widget(QWidget):
             return
 
         safe_subject = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in subject)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self.session_dir = os.path.join(self.base_dir_input.text(), f"{safe_subject}_{timestamp}")
-        os.makedirs(self.session_dir, exist_ok=True)
-
-        self._reset_imu_table()
-        imu_path = os.path.join(self.session_dir, "imu.csv")
         self.session_start_ts = time.time()
-        self._write_session_metadata(subject, ports, self.session_start_ts)
-        self._start_remote_fog_labeling()
-        self._append_session_event("recording_zero", self.session_start_ts)
-        self._append_sync_event("system", "recording_zero", self.session_start_ts)
-        self._append_session_event("start_clicked", self.session_start_ts)
-        self.imu_recorder.start(ports, imu_path, session_start_ts=self.session_start_ts)
-        imu_request_ts = time.time()
-        self._append_session_event("wt_imu_record_requested", imu_request_ts)
-        self._append_sync_event("wt_imu", "record_start_requested", imu_request_ts, f"ports={sorted(set(ports))}")
-        self._start_camera_recording()
-        if self._d435i_recording_enabled():
-            d435i_dir = os.path.join(self.session_dir, "D435i")
-            try:
+        startup_events = []
+        try:
+            os.makedirs(self.session_dir, exist_ok=False)
+            self._reset_imu_table()
+            imu_path = os.path.join(self.session_dir, "imu.csv")
+            self._write_session_metadata(subject, ports, self.session_start_ts)
+            self._start_remote_fog_labeling()
+            self._append_or_queue_session_event(startup_events, "recording_zero", self.session_start_ts)
+            self._append_or_queue_sync_event(startup_events, "system", "recording_zero", self.session_start_ts)
+            self._append_or_queue_session_event(startup_events, "start_clicked", self.session_start_ts)
+        except Exception as exc:
+            self._rollback_failed_collection_start(f"会话文件初始化失败：{exc}")
+            return
+        try:
+            biosignal_request_ts = time.time()
+            self.biosignal_recorder.start_recording(
+                self.session_dir,
+                session_start_ts=self.session_start_ts,
+            )
+            biosignal_started_ts = time.time()
+            self._append_or_queue_session_event(startup_events, "emg_eeg_record_started", biosignal_started_ts)
+            for device, filename, channels in (
+                ("EMG 000001", "emg.csv", "1-4"),
+                ("EMG 000002", "emg.csv", "5-8"),
+                ("EEG 000003", "eeg.csv", "1-3"),
+            ):
+                detail = f"port={self.biosignal_recorder.port};file={filename};channels={channels}"
+                self._append_or_queue_sync_event(
+                    startup_events,
+                    device,
+                    "record_start_requested",
+                    biosignal_request_ts,
+                    detail,
+                )
+                self._append_or_queue_sync_event(
+                    startup_events,
+                    device,
+                    "record_start_completed",
+                    biosignal_started_ts,
+                    detail,
+                )
+        except Exception as exc:
+            self._rollback_failed_collection_start(f"EMG/EEG 文件启动失败：{exc}")
+            return
+        try:
+            imu_request_ts = time.time()
+            self.imu_recorder.start(ports, imu_path, session_start_ts=self.session_start_ts)
+            imu_started_ts = time.time()
+            self._append_or_queue_session_event(startup_events, "wt_imu_record_requested", imu_request_ts)
+            self._append_or_queue_sync_event(
+                startup_events,
+                "wt_imu",
+                "record_start_requested",
+                imu_request_ts,
+                f"ports={sorted(set(ports))}",
+            )
+            self._append_or_queue_sync_event(
+                startup_events,
+                "wt_imu",
+                "record_start_completed",
+                imu_started_ts,
+                f"ports={sorted(set(ports))}",
+            )
+            self._start_camera_recording(event_sink=startup_events)
+            if self._d435i_recording_enabled():
+                d435i_dir = os.path.join(self.session_dir, "D435i")
+                d435i_request_ts = time.time()
                 self.realsense.start_recording(
                     d435i_dir,
                     subject=subject,
@@ -2717,15 +3018,22 @@ class Page1Widget(QWidget):
                     session_start_ts=self.session_start_ts,
                     save_depth_raw=True,
                 )
-                d435i_request_ts = time.time()
-                self._append_session_event("d435i_record_requested", d435i_request_ts)
-                self._append_sync_event("d435i", "record_start_requested", d435i_request_ts)
-            except Exception as exc:
-                self.log_message(f"D435i 采集启动失败: {exc}")
-        else:
-            d435i_skip_ts = time.time()
-            self._append_session_event("d435i_record_disabled", d435i_skip_ts)
-            self._append_sync_event("d435i", "record_disabled", d435i_skip_ts)
+                if not self.realsense.recording:
+                    raise RuntimeError("D435i 录像线程未进入记录状态")
+                d435i_started_ts = time.time()
+                self._append_or_queue_session_event(startup_events, "d435i_record_requested", d435i_request_ts)
+                self._append_or_queue_sync_event(startup_events, "d435i", "record_start_requested", d435i_request_ts)
+                self._append_or_queue_sync_event(startup_events, "d435i", "record_start_completed", d435i_started_ts)
+            else:
+                d435i_skip_ts = time.time()
+                self._append_or_queue_session_event(startup_events, "d435i_record_disabled", d435i_skip_ts)
+                self._append_or_queue_sync_event(startup_events, "d435i", "record_disabled", d435i_skip_ts)
+            if not self.biosignal_recorder.recording:
+                raise RuntimeError("EMG/EEG 写线程在启动阶段提前停止")
+            self._flush_queued_events(startup_events)
+        except Exception as exc:
+            self._rollback_failed_collection_start(str(exc))
+            return
         for spin in self.port_spins:
             spin.setEnabled(False)
 
@@ -2736,54 +3044,288 @@ class Page1Widget(QWidget):
         self.btn_stop.setEnabled(True)
         self.enable_d435i_checkbox.setEnabled(False)
         self.btn_record_baseline.setEnabled(False)
+        if self.biosignal_port_spin is not None:
+            self.biosignal_port_spin.setEnabled(False)
+        if self.btn_refresh_biosignal is not None:
+            self.btn_refresh_biosignal.setEnabled(False)
         for button in self.video_refresh_buttons:
             button.setEnabled(False)
         self.task_type_combo.setEnabled(False)
         for combo in self.camera_selects:
             combo.setEnabled(False)
         video_channel_count = self._enabled_usb_camera_count() + (len(self.D435I_WIDGET_INDICES) if self._d435i_recording_enabled() else 0)
-        self.log_message(f"采集已开始：{self.task_type_combo.currentText()}，5 个 IMU 与 {video_channel_count} 路视频已进入同步记录。")
+        self.log_message(
+            f"采集已开始：5 个 IMU、2 个 EMG、1 个 EEG 与 {video_channel_count} 路视频共用同一同步零点。"
+        )
         self.log_message(f"会话：{os.path.basename(self.session_dir)}")
         self.log_message("等待遥控器双击标记实验开始。")
+
+    def _rollback_failed_collection_start(self, detail: str):
+        failure_ts = time.time()
+        rollback_errors = []
+        try:
+            self._stop_camera_recording()
+        except Exception as exc:
+            rollback_errors.append(f"USB Camera: {exc}")
+        try:
+            self.realsense.stop_recording()
+        except Exception as exc:
+            rollback_errors.append(f"D435i: {exc}")
+        try:
+            self.imu_recorder.stop_recording()
+        except Exception as exc:
+            rollback_errors.append(f"WT IMU: {exc}")
+        try:
+            self.biosignal_recorder.stop_recording(timeout_s=0.05)
+        except Exception as exc:
+            rollback_errors.append(f"EMG/EEG: {exc}")
+
+        # Failure logging is best-effort: a full or unavailable disk must not
+        # prevent already-started devices from being stopped.
+        try:
+            self._append_session_event("record_start_failed", failure_ts)
+        except Exception as exc:
+            rollback_errors.append(f"启动失败事件: {exc}")
+        try:
+            self._append_sync_event("system", "record_start_failed", failure_ts, detail)
+        except Exception as exc:
+            rollback_errors.append(f"启动失败同步事件: {exc}")
+
+        biosignal_pending = self.biosignal_recorder.writer_pending
+        self.recording = False
+        self.biosignal_finalizing = biosignal_pending
+        self.btn_start.setEnabled(not biosignal_pending)
+        self.btn_stop.setEnabled(False)
+        if self.biosignal_port_spin is not None:
+            self.biosignal_port_spin.setEnabled(not biosignal_pending)
+        if self.btn_refresh_biosignal is not None:
+            self.btn_refresh_biosignal.setEnabled(not biosignal_pending)
+        if biosignal_pending:
+            self._biosignal_finalize_timer.start()
+        else:
+            self.session_start_ts = None
+
+        suffix = "；" + "；".join(rollback_errors) if rollback_errors else ""
+        self.log_message(f"采集启动失败，已回滚已启动的数据流：{detail}{suffix}")
+        QMessageBox.critical(
+            self,
+            "采集启动失败",
+            f"已停止本轮已启动的数据流。\n\n{detail}" + (f"\n\n收尾提示：{'; '.join(rollback_errors)}" if rollback_errors else ""),
+        )
 
     def stop_collection(self):
         if not self.recording:
             return
 
         stop_ts = time.time()
-        self._commit_pending_remote_single_click()
-        if self.remote_fog_active:
-            self._end_remote_fog_label(stop_ts, "", None, "fog_end_auto_stop")
-        if self.remote_experiment_active:
-            self._end_remote_experiment(stop_ts, "", None, "experiment_end_auto_stop")
-        self._append_session_event("stop_clicked", stop_ts)
-        self._append_sync_event("system", "record_stop_requested", stop_ts)
-        self._stop_camera_recording()
+        stop_errors = []
+        stop_events = []
+
+        def append_session_best_effort(event: str, pc_ts: float):
+            try:
+                self._append_session_event(event, pc_ts)
+            except Exception as exc:
+                stop_errors.append(f"事件 {event}: {exc}")
+
+        def append_sync_best_effort(device: str, event: str, pc_ts: float, detail: str = ""):
+            try:
+                self._append_sync_event(device, event, pc_ts, detail)
+            except Exception as exc:
+                stop_errors.append(f"同步事件 {device}/{event}: {exc}")
+
+        def queue_session_event(event: str, pc_ts: float):
+            self._append_or_queue_session_event(stop_events, event, pc_ts)
+
+        def queue_sync_event(device: str, event: str, pc_ts: float, detail: str = ""):
+            self._append_or_queue_sync_event(stop_events, device, event, pc_ts, detail)
+
+        def flush_stop_events_best_effort():
+            for item in list(stop_events):
+                try:
+                    self._flush_queued_events([item])
+                except Exception as exc:
+                    stop_errors.append(f"停止同步事件 {item}: {exc}")
+
+        queue_session_event("stop_clicked", stop_ts)
+        queue_sync_event("system", "record_stop_requested", stop_ts)
+
+        # Request every stream to stop before doing slower label/file finalization.
+        # This keeps end boundaries close to the operator's Stop click.
+        try:
+            biosignal_request_ts = time.time()
+            self.biosignal_recorder.request_stop_recording()
+            queue_session_event("emg_eeg_record_stop_requested", biosignal_request_ts)
+            for device in ("EMG 000001", "EMG 000002", "EEG 000003"):
+                queue_sync_event(device, "record_stop_requested", biosignal_request_ts)
+        except Exception as exc:
+            stop_errors.append(f"EMG/EEG 停止门：{exc}")
+
+        try:
+            self._stop_camera_recording(event_sink=stop_events)
+        except Exception as exc:
+            stop_errors.append(f"USB Camera: {exc}")
+
         if self._d435i_recording_enabled():
-            self.realsense.stop_recording()
-            d435i_stop_ts = time.time()
-            self._append_session_event("d435i_stop_completed", d435i_stop_ts)
-            self._append_sync_event("d435i", "record_stop_completed", d435i_stop_ts)
-        self.imu_recorder.stop_recording()
-        imu_stop_ts = time.time()
-        self._append_session_event("wt_imu_stop_completed", imu_stop_ts)
-        self._append_sync_event("wt_imu", "record_stop_completed", imu_stop_ts)
+            d435i_request_ts = time.time()
+            queue_session_event("d435i_record_stop_requested", d435i_request_ts)
+            queue_sync_event("d435i", "record_stop_requested", d435i_request_ts)
+            try:
+                self.realsense.request_stop_recording()
+            except Exception as exc:
+                stop_errors.append(f"D435i 停止门：{exc}")
+
+        imu_request_ts = time.time()
+        queue_session_event("wt_imu_record_stop_requested", imu_request_ts)
+        queue_sync_event("wt_imu", "record_stop_requested", imu_request_ts)
+        try:
+            self.imu_recorder.request_stop_recording()
+        except Exception as exc:
+            stop_errors.append(f"WT IMU 停止门：{exc}")
+
+        flush_stop_events_best_effort()
+
+        try:
+            self._commit_pending_remote_single_click(stop_on_failure=False)
+        except Exception as exc:
+            stop_errors.append(f"蓝牙待处理标签：{exc}")
+        if self.remote_fog_active:
+            try:
+                self._end_remote_fog_label(stop_ts, "", None, "fog_end_auto_stop")
+            except Exception as exc:
+                stop_errors.append(f"FOG 自动结束标签：{exc}")
+        if self.remote_experiment_active:
+            try:
+                self._end_remote_experiment(stop_ts, "", None, "experiment_end_auto_stop")
+            except Exception as exc:
+                stop_errors.append(f"实验自动结束标签：{exc}")
+
+        if self._d435i_recording_enabled():
+            try:
+                self.realsense.stop_recording()
+                d435i_event = "record_stop_completed"
+                d435i_detail = ""
+            except Exception as exc:
+                d435i_event = "record_stop_failed"
+                d435i_detail = str(exc)
+                stop_errors.append(f"D435i: {exc}")
+            d435i_completed_ts = time.time()
+            append_session_best_effort(f"d435i_{d435i_event}", d435i_completed_ts)
+            append_sync_best_effort("d435i", d435i_event, d435i_completed_ts, d435i_detail)
+
+        try:
+            self.imu_recorder.stop_recording()
+            imu_event = "record_stop_completed"
+            imu_detail = ""
+        except Exception as exc:
+            imu_event = "record_stop_failed"
+            imu_detail = str(exc)
+            stop_errors.append(f"WT IMU: {exc}")
+        imu_completed_ts = time.time()
+        append_session_best_effort(f"wt_imu_{imu_event}", imu_completed_ts)
+        append_sync_best_effort("wt_imu", imu_event, imu_completed_ts, imu_detail)
+
+        biosignal_stop_exception = ""
+        try:
+            # Normal UI stop is asynchronous after a short grace period; the
+            # finalize timer keeps Start disabled until every queued row closes.
+            self.biosignal_recorder.stop_recording(timeout_s=0.05)
+        except Exception as exc:
+            biosignal_stop_exception = str(exc)
+            stop_errors.append(f"EMG/EEG: {exc}")
+        biosignal_write_error = self.biosignal_recorder.last_write_error
+        biosignal_pending = self.biosignal_recorder.writer_pending
+        biosignal_completed_ts = time.time()
+        if biosignal_write_error or biosignal_stop_exception:
+            biosignal_stop_event = "record_stop_failed"
+        elif biosignal_pending:
+            biosignal_stop_event = "record_stop_incomplete"
+        else:
+            biosignal_stop_event = "record_stop_completed"
+        biosignal_error_detail = biosignal_write_error or biosignal_stop_exception
+        if biosignal_write_error and not biosignal_stop_exception:
+            stop_errors.append(f"EMG/EEG: {biosignal_write_error}")
+        append_session_best_effort(f"emg_eeg_{biosignal_stop_event}", biosignal_completed_ts)
+        for device in ("EMG 000001", "EMG 000002", "EEG 000003"):
+            append_sync_best_effort(device, biosignal_stop_event, biosignal_completed_ts, biosignal_error_detail)
 
         self.recording = False
-        self.session_start_ts = None
+        self.biosignal_finalizing = biosignal_pending
+        self._clear_pending_remote_single_click()
+        self.remote_fog_active = False
+        self.remote_fog_start_pc_ts = None
+        self.remote_experiment_active = False
+        self.remote_experiment_start_pc_ts = None
+        if biosignal_pending:
+            self._biosignal_finalize_timer.start()
+        else:
+            self._biosignal_finalize_timer.stop()
+            self.session_start_ts = None
+
         self._update_remote_fog_label()
         self._update_remote_experiment_label()
-        self.btn_start.setEnabled(True)
+        self.btn_start.setEnabled(not biosignal_pending)
         self.btn_stop.setEnabled(False)
         self.enable_d435i_checkbox.setEnabled(True)
         self.btn_record_baseline.setEnabled(True)
+        if self.biosignal_port_spin is not None:
+            self.biosignal_port_spin.setEnabled(not biosignal_pending)
+        if self.btn_refresh_biosignal is not None:
+            self.btn_refresh_biosignal.setEnabled(not biosignal_pending)
         for button in self.video_refresh_buttons:
             button.setEnabled(True)
         self.task_type_combo.setEnabled(True)
         for spin in self.port_spins:
             spin.setEnabled(True)
-        self.refresh_camera_devices()
-        self.log_message("采集已停止，数据写入已完成。")
+        for combo in self.camera_selects:
+            combo.setEnabled(True)
+        try:
+            self.refresh_camera_devices()
+        except Exception as exc:
+            stop_errors.append(f"相机列表刷新：{exc}")
+
+        if stop_errors:
+            self.log_message("采集已停止，但部分设备收尾失败：" + "；".join(stop_errors))
+        elif biosignal_pending:
+            self.log_message("其他设备已停止；EMG/EEG 仍在落盘，完成前不能开始下一轮采集。")
+        else:
+            self.log_message("采集已停止，数据写入已完成。")
+
+    def _poll_biosignal_finalize(self):
+        if self.biosignal_recorder.writer_pending:
+            return
+        self._biosignal_finalize_timer.stop()
+        finalize_errors = []
+        try:
+            completed = self.biosignal_recorder.stop_recording()
+        except Exception as exc:
+            completed = False
+            finalize_errors.append(str(exc))
+        finalize_ts = time.time()
+        event = "record_finalize_completed" if completed else "record_finalize_failed"
+        detail = self.biosignal_recorder.last_write_error or "；".join(finalize_errors)
+        try:
+            self._append_session_event(f"emg_eeg_{event}", finalize_ts)
+        except Exception as exc:
+            finalize_errors.append(f"finalize event: {exc}")
+        for device in ("EMG 000001", "EMG 000002", "EEG 000003"):
+            try:
+                self._append_sync_event(device, event, finalize_ts, detail)
+            except Exception as exc:
+                finalize_errors.append(f"{device} finalize event: {exc}")
+        self.biosignal_finalizing = False
+        self.session_start_ts = None
+        if not self.recording and not self._shutting_down:
+            self.btn_start.setEnabled(True)
+            if self.biosignal_port_spin is not None:
+                self.biosignal_port_spin.setEnabled(True)
+            if self.btn_refresh_biosignal is not None:
+                self.btn_refresh_biosignal.setEnabled(True)
+        if completed:
+            self.log_message("EMG/EEG 队列落盘已完成，可以开始下一轮采集。")
+        else:
+            self.log_message(f"EMG/EEG 队列落盘失败：{detail}")
+        if finalize_errors:
+            self.log_message("EMG/EEG 收尾事件写入失败：" + "；".join(finalize_errors))
 
     def _write_session_metadata(self, subject: str, ports: List[int], session_start_ts: float):
         usb_cameras = []
@@ -2807,9 +3349,9 @@ class Page1Widget(QWidget):
                 "canonical_column": "sync_timestamp",
                 "unit": "seconds",
                 "zero": "session_start_pc_timestamp",
-                "source": "WT IMU device sampling clock, anchored to the first received sample of each IMU during the recording.",
+                "source": "Shared PC session zero; each device stream reconstructs its own sample positions from its native timing rules.",
                 "expected_wt_sample_period_ms": WtMultiImuUdpRecorder.EXPECTED_SAMPLE_PERIOD_MS,
-                "note": "sync_timestamp is reconstructed from each IMU device clock and theoretical sample period. Diagnostic receive/device clock columns are intentionally omitted from imu.csv.",
+                "note": "WT IMU uses its device clock. EMG/EEG reconstructs sample time from PC packet receipt and the 1000 Hz interval, and re-anchors after long receive gaps so disconnect/reconnect periods remain visible in sync_timestamp. Packet serials and device timestamps are used internally for routing/diagnostics but are not written to emg.csv/eeg.csv.",
             },
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "imu": {
@@ -2823,6 +3365,41 @@ class Page1Widget(QWidget):
                     "dropped_samples_since_previous": "Estimated missing samples between the previous received sample and this row.",
                     "cumulative_dropped_samples": "Estimated cumulative missing samples for this IMU during the recording.",
                 },
+            },
+            "biosignals": {
+                "transport": "UDP",
+                "data_port": self.biosignal_recorder.port,
+                "device_info_port": self.biosignal_recorder.port + 1,
+                "configuration_broadcast_port": EmgEegUdpRecorder.BROADCAST_PORT,
+                "sample_rate_hz": 1000,
+                "emg": {
+                    "file": "emg.csv",
+                    "frame_header": "AA AA",
+                    "serial_channels": {
+                        "000001": [1, 2, 3, 4],
+                        "000002": [5, 6, 7, 8],
+                    },
+                },
+                "eeg": {
+                    "file": "eeg.csv",
+                    "frame_header": "AD AD",
+                    "serial_channels": {"000003": [1, 2, 3]},
+                },
+                "packet_format": {
+                    "packet_length_bytes": 47,
+                    "serial_offset": [2, 4],
+                    "data_length_offset": [6, 7],
+                    "sample_data_offset": 8,
+                    "sample_format": "signed 24-bit big-endian; divide by 1000, then divide by 1.5 when abs(value) <= 2",
+                    "device_timestamp_offset": [38, 45],
+                    "crc_offset": 46,
+                    "crc": "CRC-8, polynomial 0xD5, initial value 0",
+                },
+                "time_columns": {
+                    "world_time": "Local wall-clock time formatted as HH:MM:SS:mmm.",
+                    "sync_timestamp": "PC-reconstructed sample time relative to session_start_pc_timestamp; long receive gaps are preserved by re-anchoring to the reconnect packet time.",
+                },
+                "csv_columns": ["world_time", "sync_timestamp", "channel", "value_uV"],
             },
             "usb_cameras": usb_cameras,
             "d435i": {
@@ -2842,6 +3419,11 @@ class Page1Widget(QWidget):
             "sync": {
                 "file": "session_sync.csv",
                 "timestamp_zero": "sync_timestamp uses session_start_pc_timestamp.",
+                "recording_boundary_policy": (
+                    "Start requests are issued to biosignal, WT IMU, USB cameras, and D435i "
+                    "before queued start events are flushed. Stop requests close each stream's "
+                    "recording gate before slower label finalization and writer joins."
+                ),
                 "required_devices": [
                     *(
                         f"camera{idx + 1}"
@@ -2850,6 +3432,9 @@ class Page1Widget(QWidget):
                     ),
                     *([] if not d435i_enabled else ["d435i"]),
                     "WT IMU 1-5",
+                    "EMG 000001",
+                    "EMG 000002",
+                    "EEG 000003",
                     "bluetooth_remote",
                 ],
             },
@@ -2883,35 +3468,80 @@ class Page1Widget(QWidget):
                 writer.writerow(["device", "event", "world_time", "sync_timestamp", "detail"])
             writer.writerow([device, event, self._format_event_world_time(pc_ts), f"{sync_ts:.6f}", detail])
 
-    def _start_camera_recording(self):
+    def _append_or_queue_session_event(self, event_sink, event: str, pc_ts: float):
+        if event_sink is None:
+            self._append_session_event(event, pc_ts)
+        else:
+            event_sink.append(("session", event, pc_ts))
+
+    def _append_or_queue_sync_event(self, event_sink, device: str, event: str, pc_ts: float, detail: str = ""):
+        if event_sink is None:
+            self._append_sync_event(device, event, pc_ts, detail)
+        else:
+            event_sink.append(("sync", device, event, pc_ts, detail))
+
+    def _flush_queued_events(self, event_sink):
+        for item in event_sink:
+            if not item:
+                continue
+            if item[0] == "session":
+                _, event, pc_ts = item
+                self._append_session_event(event, pc_ts)
+            elif item[0] == "sync":
+                _, device, event, pc_ts, detail = item
+                self._append_sync_event(device, event, pc_ts, detail)
+
+    def _start_camera_recording(self, event_sink=None):
         for idx, recorder in enumerate(self.recorders[:self.USB_CAMERA_COUNT], start=1):
             if recorder is None or self.cameras[idx - 1] is None:
                 continue
             output_path = os.path.join(self.session_dir, f"camera{idx}.mp4")
             recorder.setOutputLocation(QUrl.fromLocalFile(output_path))
-            recorder.record()
             request_ts = time.time()
-            self._append_session_event(f"camera{idx}_record_requested", request_ts)
-            self._append_sync_event(f"camera{idx}", "record_start_requested", request_ts, f"file=camera{idx}.mp4")
+            recorder.record()
+            self._append_or_queue_session_event(event_sink, f"camera{idx}_record_requested", request_ts)
+            self._append_or_queue_sync_event(
+                event_sink,
+                f"camera{idx}",
+                "record_start_requested",
+                request_ts,
+                f"file=camera{idx}.mp4",
+            )
 
-    def _stop_camera_recording(self):
+    def _stop_camera_recording(self, event_sink=None):
+        errors = []
         for idx, recorder in enumerate(self.recorders[:self.USB_CAMERA_COUNT], start=1):
             if recorder is not None and recorder.recorderState() != QMediaRecorder.RecorderState.StoppedState:
-                recorder.stop()
                 request_ts = time.time()
-                self._append_session_event(f"camera{idx}_stop_requested", request_ts)
-                self._append_sync_event(f"camera{idx}", "record_stop_requested", request_ts)
+                try:
+                    recorder.stop()
+                except Exception as exc:
+                    errors.append(f"camera{idx} stop: {exc}")
+                    continue
+                try:
+                    self._append_or_queue_session_event(event_sink, f"camera{idx}_stop_requested", request_ts)
+                except Exception as exc:
+                    errors.append(f"camera{idx} event: {exc}")
+                try:
+                    self._append_or_queue_sync_event(event_sink, f"camera{idx}", "record_stop_requested", request_ts)
+                except Exception as exc:
+                    errors.append(f"camera{idx} sync: {exc}")
+        if errors:
+            raise RuntimeError("；".join(errors))
 
     def _on_usb_recorder_state_changed(self, camera_index: int, state):
         if not self.session_dir or self.session_start_ts is None:
             return
         pc_ts = time.time()
-        if state == QMediaRecorder.RecorderState.RecordingState:
-            self._append_session_event(f"camera{camera_index}_recording_started", pc_ts)
-            self._append_sync_event(f"camera{camera_index}", "recording_started", pc_ts)
-        elif state == QMediaRecorder.RecorderState.StoppedState:
-            self._append_session_event(f"camera{camera_index}_recording_stopped", pc_ts)
-            self._append_sync_event(f"camera{camera_index}", "recording_stopped", pc_ts)
+        try:
+            if state == QMediaRecorder.RecorderState.RecordingState:
+                self._append_session_event(f"camera{camera_index}_recording_started", pc_ts)
+                self._append_sync_event(f"camera{camera_index}", "recording_started", pc_ts)
+            elif state == QMediaRecorder.RecorderState.StoppedState:
+                self._append_session_event(f"camera{camera_index}_recording_stopped", pc_ts)
+                self._append_sync_event(f"camera{camera_index}", "recording_stopped", pc_ts)
+        except Exception as exc:
+            self.log_message(f"Camera{camera_index} 状态事件写入失败：{exc}")
 
     def _reset_imu_table(self):
         if self.imu_table is None:
@@ -2942,6 +3572,71 @@ class Page1Widget(QWidget):
             status_item.setForeground(QtGui.QColor("#a66a00"))
         else:
             status_item.setForeground(QtGui.QColor("#666666"))
+
+    def _on_biosignal_batch(self, payload: dict):
+        global_channel_index = int(payload.get("global_channel_index", -1))
+        if payload.get("modality") == "emg" and self.emg_panel is not None:
+            self.emg_panel.add_batch(global_channel_index, payload)
+        elif payload.get("modality") == "eeg" and self.eeg_panel is not None:
+            self.eeg_panel.add_batch(global_channel_index - 8, payload)
+
+    def _on_biosignal_device_status(self, serial: str, online: bool, count: int, source: str):
+        if self.emg_panel is not None:
+            self.emg_panel.update_device_status(serial, online, count, source)
+        if self.eeg_panel is not None:
+            self.eeg_panel.update_device_status(serial, online, count, source)
+
+        label = self.biosignal_status_labels.get(serial)
+        if label is None:
+            return
+        device_name = {"000001": "EMG 1", "000002": "EMG 2", "000003": "EEG"}.get(serial, serial)
+        if online:
+            detail = f" · {source}" if source else ""
+            label.setText(f"● {device_name} · {serial} · 在线 · {count} 帧{detail}")
+            label.setStyleSheet("color: #138A36;")
+        else:
+            label.setText(f"● {device_name} · {serial} · 等待数据")
+            label.setStyleSheet("color: #777;")
+
+    def _on_biosignal_listener_status(self, status: str):
+        if self.biosignal_listener_label is None:
+            return
+        self._update_biosignal_wifi_ip_label()
+        if status.startswith("listening:"):
+            port = status.split(":", 1)[1]
+            if self.emg_panel is not None:
+                self.emg_panel.clear()
+            if self.eeg_panel is not None:
+                self.eeg_panel.clear()
+            self.biosignal_listener_label.setText(f"接收器：正在监听 UDP {port} / 设备信息 {int(port) + 1}")
+            self.biosignal_listener_label.setStyleSheet("color: #A66A00;")
+        elif status == "error":
+            self.biosignal_listener_label.setText("接收器：启动失败")
+            self.biosignal_listener_label.setStyleSheet("color: #B00020;")
+        else:
+            self.biosignal_listener_label.setText("接收器：已停止")
+            self.biosignal_listener_label.setStyleSheet("color: #777;")
+
+    def _on_biosignal_recording_failed(self, message: str):
+        if not self.recording:
+            return
+        failure_ts = time.time()
+        event_errors = []
+        try:
+            self._append_session_event("emg_eeg_recording_failed", failure_ts)
+        except Exception as exc:
+            event_errors.append(str(exc))
+        for device in ("EMG 000001", "EMG 000002", "EEG 000003"):
+            try:
+                self._append_sync_event(device, "recording_failed", failure_ts, message)
+            except Exception as exc:
+                event_errors.append(f"{device}: {exc}")
+        try:
+            self.stop_collection()
+        finally:
+            if event_errors:
+                self.log_message("EMG/EEG 失败事件无法写入：" + "；".join(event_errors))
+        QMessageBox.critical(self, "EMG/EEG 写入失败", f"采集已停止，以避免继续产生不完整数据。\n\n{message}")
 
     def _on_imu_sample(self, sample: dict):
         try:
@@ -3050,8 +3745,20 @@ class Page1Widget(QWidget):
 
     def closeEvent(self, event: QtGui.QCloseEvent):
         self.stop_collection()
-        self.realsense.stop_preview()
-        for camera in self.cameras:
-            if camera:
-                camera.stop()
+        if not self.deactivate_page():
+            QMessageBox.warning(
+                self,
+                "数据仍在保存",
+                "EMG/EEG 数据仍在落盘。程序会继续完成保存，请稍后再次关闭。",
+            )
+            event.ignore()
+            return
+        self._remote_single_click_timer.stop()
+        if self._remote_status_timer is not None:
+            self._remote_status_timer.stop()
+        if self._remote_status_process is not None:
+            if self._remote_status_process.state() != QtCore.QProcess.ProcessState.NotRunning:
+                self._remote_status_process.kill()
+                self._remote_status_process.waitForFinished(1000)
+            self._remote_status_process = None
         super().closeEvent(event)

@@ -4,12 +4,22 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $ProjectRoot
 
 Write-Host "Project: $ProjectRoot"
+$ExistingDist = Join-Path $ProjectRoot "dist\UpStudioFOGTool"
+$ExistingData = Join-Path $ExistingDist "data"
+if (Test-Path -LiteralPath $ExistingData) {
+    $DataFile = Get-ChildItem -LiteralPath $ExistingData -Force -Recurse -File -ErrorAction Stop |
+        Select-Object -First 1
+    if ($null -ne $DataFile) {
+        throw "Build cancelled: experimental data exists under $ExistingData. Move it to a safe location before rebuilding."
+    }
+}
+
 Write-Host "Cleaning previous build outputs..."
 if (Test-Path -LiteralPath "build") {
     Remove-Item -LiteralPath "build" -Recurse -Force
 }
-if (Test-Path -LiteralPath "dist\UpStudioFOGTool") {
-    Remove-Item -LiteralPath "dist\UpStudioFOGTool" -Recurse -Force
+if (Test-Path -LiteralPath $ExistingDist) {
+    Remove-Item -LiteralPath $ExistingDist -Recurse -Force
 }
 
 Write-Host "Building UpStudioFOGTool.exe..."

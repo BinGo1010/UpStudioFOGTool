@@ -3,7 +3,7 @@ name = "qt-test"
 version = "0.1.0"
 description = "EEG实验应用，支持实时数据接收、存储和波形显示"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "pyqt6==6.9.1",
     "pyqt6-qt6==6.9.1",
@@ -18,6 +18,7 @@ dependencies = [
 [tool.setuptools]
 py-modules = [
     "main",
+    "biosignal",
     "page1",
     "page2",
 ]

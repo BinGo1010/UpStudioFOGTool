@@ -601,34 +601,24 @@ class Page2Widget(QWidget):
         if not os.path.exists(imu_path):
             QMessageBox.warning(self, "导出标签", f"未找到 IMU 文件:\n{imu_path}")
             return
-        output_path = os.path.join(session_dir, "imu_labeled.csv")
         prefog_s = float(self.prefog_spin.value())
         include_prefog = self._include_prefog()
-        with open(imu_path, "r", newline="", encoding="utf-8") as src:
-            reader = csv.DictReader(src)
-            time_column = self._preferred_time_column(reader.fieldnames or [])
-            if not reader.fieldnames or time_column is None:
-                QMessageBox.warning(self, "导出标签", "imu.csv 中未找到 sync_timestamp 或 pc_timestamp 列。")
-                return
-            fieldnames = [name for name in reader.fieldnames if name != "label"]
-            add_sync_timestamp = "sync_timestamp" not in fieldnames
-            if add_sync_timestamp:
-                insert_at = fieldnames.index("pc_timestamp") if "pc_timestamp" in fieldnames else 0
-                fieldnames.insert(insert_at, "sync_timestamp")
-            fieldnames.append("label")
-            rows = []
-            for row in reader:
-                ts = self._timestamp_from_row(row, time_column)
-                row = dict(row)
-                if add_sync_timestamp:
-                    row["sync_timestamp"] = f"{ts:.6f}"
-                row["label"] = str(self._label_for_time(ts, prefog_s, include_prefog))
-                rows.append(row)
+        labeled_sources = [
+            (imu_path, os.path.join(session_dir, "imu_labeled.csv")),
+            (os.path.join(session_dir, "emg.csv"), os.path.join(session_dir, "emg_labeled.csv")),
+            (os.path.join(session_dir, "eeg.csv"), os.path.join(session_dir, "eeg_labeled.csv")),
+        ]
+        generated_paths = []
+        try:
+            for input_path, output_path in labeled_sources:
+                if not os.path.exists(input_path):
+                    continue
+                self._export_labeled_csv(input_path, output_path, prefog_s, include_prefog)
+                generated_paths.append(output_path)
+        except (OSError, ValueError, csv.Error) as exc:
+            QMessageBox.critical(self, "导出标签失败", str(exc))
+            return
 
-        with open(output_path, "w", newline="", encoding="utf-8") as dst:
-            writer = csv.DictWriter(dst, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
         # 生成关键时间点文件: experiment start/end, FOG start/end, pre-fog start
         time_output_path = os.path.join(session_dir, "time_labeled.csv")
         time_fieldnames = ["sync_timestamp", "event_type"]
@@ -641,11 +631,61 @@ class Page2Widget(QWidget):
         self._save_current_fog_intervals(edited_intervals_path)
 
         label_text = "normal=0, pre-fog=1, fog=2" if include_prefog else "normal=0, fog=2"
+        generated_paths.extend([time_output_path, edited_intervals_path])
         QMessageBox.information(
             self,
             "导出完成",
-            f"已生成:\n{output_path}\n{time_output_path}\n{edited_intervals_path}\n\n{label_text}",
+            "已生成:\n" + "\n".join(generated_paths) + f"\n\n{label_text}",
         )
+
+    def _export_labeled_csv(
+        self,
+        input_path: str,
+        output_path: str,
+        prefog_s: float,
+        include_prefog: bool,
+    ) -> int:
+        """Stream one sensor CSV to a labeled file without loading it into RAM."""
+        temporary_path = output_path + ".tmp"
+        row_count = 0
+        try:
+            with open(input_path, "r", newline="", encoding="utf-8") as src:
+                reader = csv.DictReader(src)
+                source_fields = reader.fieldnames or []
+                time_column = self._preferred_time_column(source_fields)
+                if not source_fields or time_column is None:
+                    raise ValueError(
+                        f"{os.path.basename(input_path)} 中未找到 sync_timestamp、pc_timestamp、"
+                        "relative_timestamp 或 timestamp 列。"
+                    )
+                fieldnames = [name for name in source_fields if name != "label"]
+                add_sync_timestamp = "sync_timestamp" not in fieldnames
+                if add_sync_timestamp:
+                    insert_at = fieldnames.index("pc_timestamp") if "pc_timestamp" in fieldnames else 0
+                    fieldnames.insert(insert_at, "sync_timestamp")
+                fieldnames.append("label")
+
+                with open(temporary_path, "w", newline="", encoding="utf-8") as dst:
+                    writer = csv.DictWriter(dst, fieldnames=fieldnames, extrasaction="ignore")
+                    writer.writeheader()
+                    for source_row in reader:
+                        timestamp_s = self._timestamp_from_row(source_row, time_column)
+                        output_row = dict(source_row)
+                        if add_sync_timestamp:
+                            output_row["sync_timestamp"] = f"{timestamp_s:.6f}"
+                        output_row["label"] = str(
+                            self._label_for_time(timestamp_s, prefog_s, include_prefog)
+                        )
+                        writer.writerow(output_row)
+                        row_count += 1
+            os.replace(temporary_path, output_path)
+        except Exception:
+            try:
+                os.remove(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
+        return row_count
 
     def _time_label_events(self, include_prefog: bool) -> List[dict]:
         events = []

@@ -85,7 +85,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.page1.stop_collection()
-        self.page1.deactivate_page()
+        if not self.page1.deactivate_page():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "数据仍在保存",
+                "EMG/EEG 数据仍在落盘。程序会继续完成保存，请稍后再次关闭。",
+            )
+            event.ignore()
+            return
         self.page2.deactivate_page()
         super().closeEvent(event)
 
