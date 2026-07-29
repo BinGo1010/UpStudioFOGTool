@@ -305,8 +305,19 @@ class Page1BiosignalIntegrationTests(unittest.TestCase):
 
             self.assertEqual(len(emg_rows), 80)
             self.assertEqual(len(eeg_rows), 30)
-            self.assertEqual(list(emg_rows[0]), ["world_time", "sync_timestamp", "channel", "value_uV"])
+            self.assertEqual(
+                list(emg_rows[0]),
+                ["world_time", "sync_timestamp", "packet_serial_number", "channel", "value_uV"],
+            )
             self.assertEqual(list(eeg_rows[0]), ["world_time", "sync_timestamp", "channel", "value_uV"])
+            self.assertEqual(
+                {row["packet_serial_number"] for row in emg_rows if int(row["channel"]) <= 4},
+                {"000001"},
+            )
+            self.assertEqual(
+                {row["packet_serial_number"] for row in emg_rows if int(row["channel"]) >= 5},
+                {"000002"},
+            )
             self.assertEqual(
                 {int(row["channel"]) for row in emg_rows},
                 set(range(1, 9)),

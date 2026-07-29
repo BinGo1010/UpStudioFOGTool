@@ -124,11 +124,12 @@ session/
 说明：
 
 - `imu.csv`：WT IMU 原始采集数据，时间戳相对本次 session 开始时间。
-- `emg.csv`：8 路低频肌电原始值；`000001` 对应通道 1–4，`000002` 对应通道 5–8。
+- `emg.csv`：8 路低频肌电原始值；`000001` 对应通道 1–4，`000002` 对应通道 5–8，并保留 `packet_serial_number` 便于按设备拆分。
 - `eeg.csv`：`000003` 的 3 路脑电原始值。
 - 接收器严格按帧内序列号路由；未知序列号或序列号与信号类型不一致的帧会被拒绝，不会按来源 IP 猜测设备。
-- `emg.csv` 与 `eeg.csv` 按 PC 收包时间和 1000 Hz 理论采样间隔重建 `sync_timestamp`；正常接收时连续递增，遇到明显断连/重连时会重新锚定到重连包时间，使时间轴保留断连空洞。帧内序列号和设备时间戳仅用于内部路由/诊断，不写入 CSV。
-- 生理信号 CSV 字段依次为 `world_time`、`sync_timestamp`、`channel`、`value_uV`。
+- `emg.csv` 与 `eeg.csv` 按 PC 收包时间和 1000 Hz 理论采样间隔重建 `sync_timestamp`；正常接收时连续递增，遇到明显断连/重连时会重新锚定到重连包时间，使时间轴保留断连空洞。设备时间戳仅用于内部诊断，不写入 CSV。
+- `emg.csv` 字段依次为 `world_time`、`sync_timestamp`、`packet_serial_number`、`channel`、`value_uV`。
+- `eeg.csv` 字段依次为 `world_time`、`sync_timestamp`、`channel`、`value_uV`。
 - `camera1.mp4` 到 `camera4.mp4`：四路 USB 相机视频。
 - `D435i/`：仅在开启 D435i 视频采集时生成。
 - `session_events.csv`：采集流程事件。

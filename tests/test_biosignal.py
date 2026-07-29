@@ -2,12 +2,16 @@ import csv
 import os
 import tempfile
 import threading
+import time
 import unittest
 
 import numpy as np
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtWidgets
 
-from biosignal import EmgEegPacketParser, EmgEegUdpRecorder
+from biosignal import BiosignalChannelPlot, EmgEegPacketParser, EmgEegUdpRecorder
+
+
+APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
 def _signed_24_bytes(value: int) -> bytes:
@@ -182,8 +186,12 @@ class RecorderTests(unittest.TestCase):
 
         self.assertEqual(len(emg_rows), 10)
         self.assertEqual(len(eeg_rows), 10)
-        self.assertEqual(list(emg_rows[0]), ["world_time", "sync_timestamp", "channel", "value_uV"])
+        self.assertEqual(
+            list(emg_rows[0]),
+            ["world_time", "sync_timestamp", "packet_serial_number", "channel", "value_uV"],
+        )
         self.assertEqual(list(eeg_rows[0]), ["world_time", "sync_timestamp", "channel", "value_uV"])
+        self.assertEqual(emg_rows[0]["packet_serial_number"], "000001")
         self.assertEqual(emg_rows[0]["channel"], "1")
         self.assertEqual(eeg_rows[0]["channel"], "1")
         self.assertAlmostEqual(float(emg_rows[-1]["sync_timestamp"]), 0.02, places=6)
@@ -297,6 +305,23 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(message[11:13], (30300).to_bytes(2, "big"))
         self.assertEqual(message[14:16], (30300).to_bytes(2, "big"))
         self.assertEqual(message[16], recorder.parser.calculate_crc(message, 16))
+
+
+class BiosignalPlotTests(unittest.TestCase):
+    def test_observed_rate_is_samples_per_second_not_per_refresh_window(self):
+        plot = BiosignalChannelPlot("CH1", "#138A36")
+        try:
+            plot._last_rate_update_monotonic = 100.0
+            plot.add_batch(np.ones(2000, dtype=np.float32), rms_uv=1.0, amplitude_uv=1.0)
+            original_monotonic = time.monotonic
+            try:
+                time.monotonic = lambda: 102.0
+                plot.refresh(update_rate=True)
+            finally:
+                time.monotonic = original_monotonic
+            self.assertEqual(plot._observed_rate, 1000)
+        finally:
+            plot.deleteLater()
 
 
 if __name__ == "__main__":

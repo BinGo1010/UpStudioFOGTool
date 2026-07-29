@@ -262,14 +262,25 @@ class EmgEegUdpRecorder(QtCore.QObject):
     DEFAULT_PORT = 30300
     BROADCAST_PORT = 30200
     ONLINE_TIMEOUT_S = 3.0
-    UI_FLUSH_INTERVAL_MS = 50
-    UI_MAX_PENDING_BATCHES_PER_CHANNEL = 100
-    CSV_HEADERS = [
+    UI_FLUSH_INTERVAL_MS = 100
+    UI_MAX_PENDING_BATCHES_PER_CHANNEL = 30
+    EEG_CSV_HEADERS = [
         "world_time",
         "sync_timestamp",
         "channel",
         "value_uV",
     ]
+    EMG_CSV_HEADERS = [
+        "world_time",
+        "sync_timestamp",
+        "packet_serial_number",
+        "channel",
+        "value_uV",
+    ]
+    CSV_HEADERS = {
+        "emg": EMG_CSV_HEADERS,
+        "eeg": EEG_CSV_HEADERS,
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -407,7 +418,7 @@ class EmgEegUdpRecorder(QtCore.QObject):
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         else:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 * 1024 * 1024)
         sock.settimeout(0.5)
         sock.bind(("0.0.0.0", port))
         return sock
@@ -448,7 +459,7 @@ class EmgEegUdpRecorder(QtCore.QObject):
                 file_obj = open(path, "w", newline="", encoding="utf-8")
                 opened_files[modality] = file_obj
                 writer = csv.writer(file_obj)
-                writer.writerow(self.CSV_HEADERS)
+                writer.writerow(self.CSV_HEADERS[modality])
                 opened_writers[modality] = writer
         except Exception:
             for file_obj in opened_files.values():
@@ -749,12 +760,17 @@ class EmgEegUdpRecorder(QtCore.QObject):
         rows = []
         for timestamp_us, value in zip(batch.sample_timestamps_us, batch.values):
             timestamp_s = float(timestamp_us) / 1_000_000.0
-            rows.append([
+            row = [
                 self._format_world_time(timestamp_s),
                 f"{timestamp_s - session_start_ts:.6f}",
+            ]
+            if batch.modality == "emg":
+                row.append(batch.packet_serial)
+            row.extend([
                 batch.modality_channel,
                 format(float(value), ".12g"),
             ])
+            rows.append(row)
         writer.writerows(rows)
 
     @staticmethod
@@ -848,6 +864,7 @@ class BiosignalChannelPlot(QWidget):
         self._latest_amplitude = 0.0
         self._observed_rate = 0
         self._latest_dominant_frequency = 0.0
+        self._last_rate_update_monotonic = time.monotonic()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -899,12 +916,16 @@ class BiosignalChannelPlot(QWidget):
         self._latest_amplitude = 0.0
         self._observed_rate = 0
         self._latest_dominant_frequency = 0.0
+        self._last_rate_update_monotonic = time.monotonic()
         self.curve.setData(self.x_axis, self.data_buffer)
 
     def refresh(self, update_rate: bool = False):
         if update_rate:
-            self._observed_rate = self._samples_since_rate_update
+            now = time.monotonic()
+            elapsed_s = max(1e-6, now - self._last_rate_update_monotonic)
+            self._observed_rate = int(round(self._samples_since_rate_update / elapsed_s))
             self._samples_since_rate_update = 0
+            self._last_rate_update_monotonic = now
             self._latest_dominant_frequency = self._dominant_frequency()
         if self.isVisible():
             self.curve.setData(self.x_axis, self.data_buffer)
@@ -975,7 +996,7 @@ class BiosignalPanel(QWidget):
 
         self._render_timer = QtCore.QTimer(self)
         self._render_timer.timeout.connect(self._refresh_plots)
-        self._render_timer.start(50)
+        self._render_timer.start(100)
 
     def add_batch(self, channel_index: int, payload: dict):
         if not 0 <= channel_index < len(self.channel_plots):
@@ -1003,6 +1024,8 @@ class BiosignalPanel(QWidget):
             plot.clear()
 
     def _refresh_plots(self):
+        if not self.isVisible():
+            return
         self._rate_tick = (self._rate_tick + 1) % 20
         update_rate = self._rate_tick == 0
         for plot in self.channel_plots:

@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pyqtgraph as pg
@@ -127,7 +127,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
     command_status = pyqtSignal(str)
 
     DEVICE_IDS = {
-        1: "WT5500012382",
+        1: "WT5500000000",
         2: "WT5500012214",
         3: "WT5500012221",
         4: "WT5500012369",
@@ -137,15 +137,21 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
     WIFI_PASSWORD = "66666666"
     WT_FRAME_LEN = 54
     UI_EMIT_INTERVAL_S = 0.05
-    EXPECTED_SAMPLE_PERIOD_MS = 5.0
+    EXPECTED_SAMPLE_RATE_HZ = 100.0
+    EXPECTED_SAMPLE_PERIOD_MS = 1000.0 / EXPECTED_SAMPLE_RATE_HZ
     DEVICE_CLOCK_ROLLOVER_MS = 24 * 60 * 60 * 1000
+    DEVICE_CLOCK_GLITCH_TOLERANCE_MS = 100.0
+    UDP_PACKET_QUEUE_SIZE = 50000
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.running = False
         self._threads: List[threading.Thread] = []
+        self._processor_thread: Optional[threading.Thread] = None
         self._sockets: List[socket.socket] = []
+        self._packet_queue: "queue.Queue[Optional[tuple]]" = queue.Queue(maxsize=self.UDP_PACKET_QUEUE_SIZE)
         self._writer_lock = threading.Lock()
+        self._timing_lock = threading.Lock()
         self._csv_file = None
         self._csv_writer = None
         self._recording_start_ts: Optional[float] = None
@@ -158,6 +164,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         self._port_sockets: Dict[int, socket.socket] = {}
         self._device_endpoints: Dict[int, tuple] = {}
         self._raw_packet_counts: Dict[int, int] = {}
+        self._dropped_udp_packets = 0
         self._recording_sample_counts: Dict[int, int] = {}
         self._recording_clock_states: Dict[int, dict] = {}
         self._unknown_device_ids: set = set()
@@ -176,9 +183,11 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         self._counts = {i: 0 for i in self.DEVICE_IDS}
         self._device_endpoints.clear()
         self._raw_packet_counts = {}
+        self._dropped_udp_packets = 0
         self._unknown_device_ids = set()
         self._unparsed_packet_counts = {}
         self._last_ui_emit_ts = {}
+        self._packet_queue = queue.Queue(maxsize=self.UDP_PACKET_QUEUE_SIZE)
         with self._latest_sample_lock:
             self._latest_samples = {}
         self.running = True
@@ -190,6 +199,13 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
 
         for imu_index in self.DEVICE_IDS:
             self.status_changed.emit(imu_index, "waiting", 0)
+
+        self._processor_thread = threading.Thread(
+            target=self._process_packet_loop,
+            daemon=True,
+            name="Page14-WT-UDP-Processor",
+        )
+        self._processor_thread.start()
 
         for port in unique_ports:
             thread = threading.Thread(
@@ -213,8 +229,9 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             self._write_queue = queue.Queue(maxsize=100000)
             self._writer_running = True
             self._dropped_rows = 0
-            self._recording_sample_counts = {i: 0 for i in self.DEVICE_IDS}
-            self._recording_clock_states = {}
+            with self._timing_lock:
+                self._recording_sample_counts = {i: 0 for i in self.DEVICE_IDS}
+                self._recording_clock_states = {}
             self._csv_writer.writerow([
                 "world_time",
                 "sync_timestamp",
@@ -317,8 +334,17 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         for thread in self._threads:
             if thread.is_alive():
                 thread.join(timeout=1.0)
+        processor_thread = self._processor_thread
+        if processor_thread is not None:
+            try:
+                self._packet_queue.put(None, timeout=0.5)
+            except queue.Full:
+                pass
+            if processor_thread.is_alive():
+                processor_thread.join(timeout=2.0)
 
         self._threads.clear()
+        self._processor_thread = None
         self._sockets.clear()
         self._port_sockets.clear()
         self._device_endpoints.clear()
@@ -330,7 +356,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         self._sockets.append(sock)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 * 1024 * 1024)
             sock.bind(("0.0.0.0", port))
             sock.settimeout(0.1)
             self._port_sockets[port] = sock
@@ -358,90 +384,17 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
                 recv_ts = time.time()
                 raw_count = self._raw_packet_counts.get(port, 0) + 1
                 self._raw_packet_counts[port] = raw_count
-                rows = self._parse_wt_frames(data)
-                if not rows:
-                    self._log_unparsed_udp_packet(port, addr, data, raw_count)
-                    continue
-
-                csv_rows = []
-                with self._writer_lock:
-                    start_ts = self._recording_start_ts
-                    writer_active = self._csv_writer is not None and start_ts is not None
-                    if writer_active:
-                        pc_receive_elapsed_ts = recv_ts - start_ts
-                    else:
-                        pc_receive_elapsed_ts = 0.0
-
-                    if writer_active:
-                        for row in rows:
-                            imu_index = row["imu_index"]
-                            timing = self._recording_sample_timing(
-                                imu_index,
-                                row["device_clock_ms"],
-                                pc_receive_elapsed_ts,
-                            )
-                            csv_rows.append([
-                                self._format_world_time(start_ts + timing["sync_timestamp"]),
-                                f"{timing['sync_timestamp']:.6f}",
-                                imu_index,
-                                timing["sample_counter"],
-                                timing["dropped_samples_since_previous"],
-                                timing["cumulative_dropped_samples"],
-                                *row["acc_csv"],
-                                *row["gyr_csv"],
-                                *row["gnt_csv"],
-                                *row["angle_csv"],
-                                row["temperature_csv"],
-                                row["battery_percent"],
-                            ])
-                queue_warnings = []
-                if csv_rows:
-                    with self._writer_lock:
-                        writer_active = self._csv_writer is not None and self._recording_start_ts is not None
-                        if writer_active:
-                            for csv_row in csv_rows:
-                                try:
-                                    self._write_queue.put_nowait(csv_row)
-                                except queue.Full:
-                                    self._dropped_rows += 1
-                                    if self._dropped_rows in (1, 100, 1000) or self._dropped_rows % 10000 == 0:
-                                        queue_warnings.append(
-                                            f"WT IMU CSV queue full, dropped rows={self._dropped_rows}"
-                                        )
-                for warning in queue_warnings:
-                    self.error_occurred.emit(warning)
-
-                for row in rows:
-                    imu_index = row["imu_index"]
-                    self._device_endpoints[imu_index] = (addr, port)
-                    self._counts[imu_index] = self._counts.get(imu_index, 0) + 1
-                    packet_count = self._counts[imu_index]
-                    sample = {
-                        "imu_index": imu_index,
-                        "device_id": row["device_id"],
-                        "port": port,
-                        "count": packet_count,
-                        "timestamp": recv_ts,
-                        "acc": row["acc"],
-                        "gyr": row["gyr"],
-                        "gnt": row["gnt"],
-                        "angle": row["angle"],
-                        "acc_csv": row["acc_csv"],
-                        "gyr_csv": row["gyr_csv"],
-                        "gnt_csv": row["gnt_csv"],
-                        "angle_csv": row["angle_csv"],
-                        "temperature": row["temperature"],
-                        "temperature_csv": row["temperature_csv"],
-                        "battery_percent": row["battery_percent"],
-                        "rssi": row["rssi"],
-                    }
-                    with self._latest_sample_lock:
-                        self._latest_samples[imu_index] = dict(sample)
-                    last_ui_ts = self._last_ui_emit_ts.get(imu_index, 0.0)
-                    if packet_count == 1 or recv_ts - last_ui_ts >= self.UI_EMIT_INTERVAL_S:
-                        self._last_ui_emit_ts[imu_index] = recv_ts
-                        self.status_changed.emit(imu_index, "receiving", packet_count)
-                        self.sample_received.emit(sample)
+                try:
+                    self._packet_queue.put_nowait((port, addr, data, recv_ts, raw_count))
+                except queue.Full:
+                    self._dropped_udp_packets += 1
+                    if (
+                        self._dropped_udp_packets in (1, 10, 100, 1000)
+                        or self._dropped_udp_packets % 10000 == 0
+                    ):
+                        self.error_occurred.emit(
+                            f"WT IMU UDP processing queue full, dropped packets={self._dropped_udp_packets}"
+                        )
             except socket.timeout:
                 continue
             except OSError:
@@ -453,6 +406,109 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         for imu_index in self.DEVICE_IDS:
             self.status_changed.emit(imu_index, "stopped", self._counts.get(imu_index, 0))
         self._port_sockets.pop(port, None)
+
+    def _process_packet_loop(self):
+        while self.running or not self._packet_queue.empty():
+            try:
+                item = self._packet_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            port, addr, data, recv_ts, raw_count = item
+            try:
+                self._process_wt_datagram(port, addr, data, recv_ts, raw_count)
+            except Exception as exc:
+                if self.running:
+                    self.error_occurred.emit(f"WT IMU packet processing failed on port {port}: {exc}")
+
+    def _process_wt_datagram(self, port: int, addr, data: bytes, recv_ts: float, raw_count: int):
+        rows = self._parse_wt_frames(data)
+        if not rows:
+            self._log_unparsed_udp_packet(port, addr, data, raw_count)
+            return
+
+        with self._writer_lock:
+            start_ts = self._recording_start_ts
+            write_queue = self._write_queue
+            writer_active = self._csv_writer is not None and start_ts is not None
+        pc_receive_elapsed_ts = recv_ts - start_ts if writer_active else 0.0
+
+        csv_rows = []
+        if writer_active:
+            with self._timing_lock:
+                for row in rows:
+                    imu_index = row["imu_index"]
+                    timing = self._recording_sample_timing(
+                        imu_index,
+                        row["device_clock_ms"],
+                        pc_receive_elapsed_ts,
+                    )
+                    csv_rows.append([
+                        self._format_world_time(start_ts + timing["sync_timestamp"]),
+                        f"{timing['sync_timestamp']:.6f}",
+                        imu_index,
+                        timing["sample_counter"],
+                        timing["dropped_samples_since_previous"],
+                        timing["cumulative_dropped_samples"],
+                        *row["acc_csv"],
+                        *row["gyr_csv"],
+                        *row["gnt_csv"],
+                        *row["angle_csv"],
+                        row["temperature_csv"],
+                        row["battery_percent"],
+                    ])
+
+        queue_warnings = []
+        if csv_rows:
+            with self._writer_lock:
+                still_active = (
+                    self._csv_writer is not None
+                    and self._recording_start_ts == start_ts
+                    and self._write_queue is write_queue
+                )
+            if still_active:
+                for csv_row in csv_rows:
+                    try:
+                        write_queue.put_nowait(csv_row)
+                    except queue.Full:
+                        self._dropped_rows += 1
+                        if self._dropped_rows in (1, 100, 1000) or self._dropped_rows % 10000 == 0:
+                            queue_warnings.append(f"WT IMU CSV queue full, dropped rows={self._dropped_rows}")
+        for warning in queue_warnings:
+            self.error_occurred.emit(warning)
+
+        for row in rows:
+            imu_index = row["imu_index"]
+            self._device_endpoints[imu_index] = (addr, port)
+            self._counts[imu_index] = self._counts.get(imu_index, 0) + 1
+            packet_count = self._counts[imu_index]
+            sample = {
+                "imu_index": imu_index,
+                "device_id": row["device_id"],
+                "port": port,
+                "count": packet_count,
+                "timestamp": recv_ts,
+                "acc": row["acc"],
+                "gyr": row["gyr"],
+                "gnt": row["gnt"],
+                "angle": row["angle"],
+                "acc_csv": row["acc_csv"],
+                "gyr_csv": row["gyr_csv"],
+                "gnt_csv": row["gnt_csv"],
+                "angle_csv": row["angle_csv"],
+                "temperature": row["temperature"],
+                "temperature_csv": row["temperature_csv"],
+                "battery_percent": row["battery_percent"],
+                "rssi": row["rssi"],
+            }
+            with self._latest_sample_lock:
+                self._latest_samples[imu_index] = dict(sample)
+            last_ui_ts = self._last_ui_emit_ts.get(imu_index, 0.0)
+            if packet_count == 1 or recv_ts - last_ui_ts >= self.UI_EMIT_INTERVAL_S:
+                self._last_ui_emit_ts[imu_index] = recv_ts
+                self.status_changed.emit(imu_index, "receiving", packet_count)
+                self.sample_received.emit(sample)
 
     def calibrate_accelerometer(self, imu_index: int):
         sequence = [
@@ -602,9 +658,23 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
                 "last_sample_counter": 0,
                 "sample_counter_offset": 0,
                 "last_sync_timestamp": float(pc_receive_elapsed_ts),
+                "last_pc_receive_elapsed_ts": float(pc_receive_elapsed_ts),
                 "cumulative_dropped_samples": 0,
+                "clock_glitch_count": 0,
             }
             self._recording_clock_states[imu_index] = state
+            self._recording_sample_counts[imu_index] = 1
+            state["received_sample_counter"] = 1
+            state["last_sample_counter"] = 1
+            state["last_sync_timestamp"] = float(pc_receive_elapsed_ts)
+            return {
+                "sync_timestamp": float(pc_receive_elapsed_ts),
+                "device_elapsed_ms": 0.0,
+                "sample_counter": 1,
+                "received_sample_counter": 1,
+                "dropped_samples_since_previous": 0,
+                "cumulative_dropped_samples": 0,
+            }
 
         raw_clock_ms = float(device_clock_ms)
         last_raw_ms = float(state["last_raw_device_clock_ms"])
@@ -617,33 +687,46 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             rollover_offset_ms -= self.DEVICE_CLOCK_ROLLOVER_MS
 
         unwrapped_clock_ms = raw_clock_ms + rollover_offset_ms
-        device_elapsed_ms = unwrapped_clock_ms - float(state["base_device_clock_ms"])
-        if device_elapsed_ms < -period_ms:
-            # Device clock was reset during recording. Re-anchor timing while keeping counters monotonic.
-            last_sync_timestamp = float(state.get("last_sync_timestamp", pc_receive_elapsed_ts))
-            state["sample_counter_offset"] = int(state["last_sample_counter"])
-            state["base_device_clock_ms"] = unwrapped_clock_ms
-            state["base_sync_timestamp"] = max(
-                float(pc_receive_elapsed_ts),
-                last_sync_timestamp + period_ms / 1000.0,
-            )
-            device_elapsed_ms = 0.0
+        last_unwrapped_ms = float(state["last_unwrapped_device_clock_ms"])
+        device_gap_ms = unwrapped_clock_ms - last_unwrapped_ms
+        last_pc_elapsed_ts = float(state.get("last_pc_receive_elapsed_ts", pc_receive_elapsed_ts))
+        pc_gap_ms = max(0.0, (float(pc_receive_elapsed_ts) - last_pc_elapsed_ts) * 1000.0)
 
-        theoretical_elapsed_steps = max(0, int(math.floor(device_elapsed_ms / period_ms + 0.5)))
-        sample_counter = int(state.get("sample_counter_offset", 0)) + theoretical_elapsed_steps + 1
-        received_sample_counter = int(state["received_sample_counter"]) + 1
+        clock_glitch = False
+        if device_gap_ms < -period_ms:
+            clock_glitch = True
+            gap_ms = pc_gap_ms
+        elif device_gap_ms - pc_gap_ms > self.DEVICE_CLOCK_GLITCH_TOLERANCE_MS:
+            # A single IMU can occasionally report a future device clock while
+            # packets are still arriving continuously. Treat that as a clock
+            # glitch rather than a huge packet-loss burst.
+            clock_glitch = True
+            gap_ms = pc_gap_ms
+        else:
+            gap_ms = max(0.0, device_gap_ms)
+
+        theoretical_elapsed_steps = max(1, int(math.floor(gap_ms / period_ms + 0.5)))
         last_sample_counter = int(state["last_sample_counter"])
-        dropped_since_previous = max(0, sample_counter - last_sample_counter - 1) if last_sample_counter else 0
+        sample_counter = last_sample_counter + theoretical_elapsed_steps
+        received_sample_counter = int(state["received_sample_counter"]) + 1
+        dropped_since_previous = max(0, theoretical_elapsed_steps - 1)
         cumulative_dropped = int(state["cumulative_dropped_samples"]) + dropped_since_previous
-        sync_timestamp = float(state["base_sync_timestamp"]) + theoretical_elapsed_steps * period_ms / 1000.0
+        sync_timestamp = float(state["last_sync_timestamp"]) + theoretical_elapsed_steps * period_ms / 1000.0
+        device_elapsed_ms = unwrapped_clock_ms - float(state["base_device_clock_ms"])
 
         state["last_raw_device_clock_ms"] = raw_clock_ms
         state["clock_rollover_offset_ms"] = rollover_offset_ms
         state["last_unwrapped_device_clock_ms"] = unwrapped_clock_ms
+        state["last_pc_receive_elapsed_ts"] = float(pc_receive_elapsed_ts)
         state["received_sample_counter"] = received_sample_counter
         state["last_sample_counter"] = sample_counter
         state["last_sync_timestamp"] = sync_timestamp
         state["cumulative_dropped_samples"] = cumulative_dropped
+        if clock_glitch:
+            state["clock_glitch_count"] = int(state.get("clock_glitch_count", 0)) + 1
+            state["sample_counter_offset"] = sample_counter - 1
+            state["base_device_clock_ms"] = unwrapped_clock_ms
+            state["base_sync_timestamp"] = sync_timestamp
         self._recording_sample_counts[imu_index] = received_sample_counter
 
         return {
@@ -1360,6 +1443,14 @@ class Page1Widget(QWidget):
         ("Angle Y", "angle", 1, (-180.0, 180.0)),
         ("Angle Z", "angle", 2, (-180.0, 180.0)),
     ]
+    DEFAULT_IMU_PLOTS = [
+        (1, 2),  # IMU1 Acc Z
+        (2, 2),  # IMU2 Acc Z
+        (3, 2),  # IMU3 Acc Z
+        (4, 2),  # IMU4 Acc Z
+        (5, 2),  # IMU5 Acc Z
+        (1, 0),  # IMU1 Acc X
+    ]
 
     USB_CAMERA_COUNT = 4
     D435I_RGB_WIDGET_INDEX = USB_CAMERA_COUNT
@@ -1422,6 +1513,9 @@ class Page1Widget(QWidget):
         self._biosignal_finalize_timer = QtCore.QTimer(self)
         self._biosignal_finalize_timer.setInterval(1000)
         self._biosignal_finalize_timer.timeout.connect(self._poll_biosignal_finalize)
+        self._wifi_ip_refresh_timer = QtCore.QTimer(self)
+        self._wifi_ip_refresh_timer.setInterval(3000)
+        self._wifi_ip_refresh_timer.timeout.connect(self._update_biosignal_wifi_ip_label)
         self._imu_refresh_generation = 0
         self.latest_imu_samples: Dict[int, dict] = {}
         self.remote_indicator_on = False
@@ -1468,6 +1562,8 @@ class Page1Widget(QWidget):
 
     def activate_page(self):
         self._shutting_down = False
+        self._update_biosignal_wifi_ip_label()
+        self._wifi_ip_refresh_timer.start()
         QtCore.QTimer.singleShot(0, self._start_capture_devices)
 
     def _start_capture_devices(self):
@@ -1488,6 +1584,7 @@ class Page1Widget(QWidget):
             return False
         self._shutting_down = True
         self._biosignal_refresh_timer.stop()
+        self._wifi_ip_refresh_timer.stop()
         if self.biosignal_recorder.writer_pending:
             self._biosignal_finalize_timer.stop()
             self.biosignal_recorder.stop_recording(timeout_s=30.0)
@@ -2304,12 +2401,14 @@ class Page1Widget(QWidget):
         imu_select = QComboBox()
         for imu_index in range(1, 6):
             imu_select.addItem(f"IMU{imu_index}", imu_index)
-        imu_select.setCurrentIndex(0)
 
         channel_select = QComboBox()
         for channel_index, (label, *_rest) in enumerate(self.IMU_CHANNELS):
             channel_select.addItem(label, channel_index)
-        channel_select.setCurrentIndex(min(plot_index, 5))
+
+        default_imu, default_channel = self.DEFAULT_IMU_PLOTS[plot_index]
+        imu_select.setCurrentIndex(max(0, min(default_imu - 1, imu_select.count() - 1)))
+        channel_select.setCurrentIndex(max(0, min(default_channel, channel_select.count() - 1)))
 
         imu_select.currentIndexChanged.connect(
             lambda _index, axis_index=plot_index: self._on_imu_plot_selection_changed(axis_index)
@@ -2627,32 +2726,77 @@ class Page1Widget(QWidget):
         return f"WLAN diagnostic: SSID={name}, category={category}, IPv4={ip}, IMU target should use {ip}:1399"
 
     def _current_wlan_ipv4(self) -> str:
-        command = (
-            "$ip = Get-NetIPAddress -InterfaceAlias 'WLAN' -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
-            "Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -First 1; "
-            "if ($ip) { Write-Output $ip.IPAddress } else { Write-Output 'unknown' }"
-        )
+        for adapter_name, ip in self._wifi_ipv4_candidates_from_ipconfig():
+            if self._is_usable_ipv4(ip):
+                return ip
+        return "unknown"
+
+    def _wifi_ipv4_candidates_from_ipconfig(self) -> List[Tuple[str, str]]:
         try:
             result = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                ["ipconfig"],
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-                timeout=2,
+                timeout=1.5,
             )
         except Exception:
-            return "unknown"
+            return []
         if result.returncode != 0:
-            return "unknown"
-        ip = result.stdout.strip().splitlines()[0] if result.stdout.strip() else "unknown"
-        return ip or "unknown"
+            return []
+
+        encodings = ["mbcs", "utf-8"] if os.name == "nt" else ["utf-8"]
+        text = ""
+        for encoding in encodings:
+            try:
+                text = result.stdout.decode(encoding, errors="ignore")
+                if "IPv4" in text or "adapter" in text.lower() or "适配器" in text:
+                    break
+            except LookupError:
+                continue
+
+        candidates = []
+        current_adapter = ""
+        current_is_wifi = False
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.endswith(":") and ("adapter" in line.lower() or "适配器" in line):
+                current_adapter = line[:-1].strip()
+                current_is_wifi = self._is_wifi_adapter_label(current_adapter)
+                continue
+            if not current_adapter or not current_is_wifi or "IPv4" not in line:
+                continue
+            match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", line)
+            if match:
+                candidates.append((current_adapter, match.group(1)))
+        return candidates
+
+    @staticmethod
+    def _is_wifi_adapter_label(label: str) -> bool:
+        text = label.lower()
+        wifi_markers = ("wireless lan", "wi-fi", "wifi", "wlan", "802.11", "无线")
+        return any(marker in text for marker in wifi_markers)
+
+    @staticmethod
+    def _is_usable_ipv4(ip: str) -> bool:
+        try:
+            parts = [int(part) for part in str(ip).split(".")]
+        except ValueError:
+            return False
+        if len(parts) != 4 or any(part < 0 or part > 255 for part in parts):
+            return False
+        return not (
+            ip.startswith("127.")
+            or ip.startswith("169.254.")
+            or ip == "0.0.0.0"
+        )
 
     def _update_biosignal_wifi_ip_label(self):
         if self.biosignal_wifi_ip_label is None:
             return
         ip = self._current_wlan_ipv4()
-        self.biosignal_wifi_ip_label.setText(f"当前 Wi-Fi 主机 IP 是：{ip}")
+        display_ip = ip if ip != "unknown" else "未检测到"
+        self.biosignal_wifi_ip_label.setText(f"当前 Wi-Fi 主机 IP 是：{display_ip}")
         color = "#138a36" if ip != "unknown" else "#b00020"
         self.biosignal_wifi_ip_label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
@@ -3350,8 +3494,9 @@ class Page1Widget(QWidget):
                 "unit": "seconds",
                 "zero": "session_start_pc_timestamp",
                 "source": "Shared PC session zero; each device stream reconstructs its own sample positions from its native timing rules.",
+                "expected_wt_sample_rate_hz": WtMultiImuUdpRecorder.EXPECTED_SAMPLE_RATE_HZ,
                 "expected_wt_sample_period_ms": WtMultiImuUdpRecorder.EXPECTED_SAMPLE_PERIOD_MS,
-                "note": "WT IMU uses its device clock. EMG/EEG reconstructs sample time from PC packet receipt and the 1000 Hz interval, and re-anchors after long receive gaps so disconnect/reconnect periods remain visible in sync_timestamp. Packet serials and device timestamps are used internally for routing/diagnostics but are not written to emg.csv/eeg.csv.",
+                "note": "WT IMU uses its device clock. EMG/EEG reconstructs sample time from PC packet receipt and the 1000 Hz interval, and re-anchors after long receive gaps so disconnect/reconnect periods remain visible in sync_timestamp. EMG packet serials are written to emg.csv to distinguish devices 000001 and 000002; EEG packet serials and device timestamps remain internal diagnostics.",
             },
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "imu": {
@@ -3399,7 +3544,8 @@ class Page1Widget(QWidget):
                     "world_time": "Local wall-clock time formatted as HH:MM:SS:mmm.",
                     "sync_timestamp": "PC-reconstructed sample time relative to session_start_pc_timestamp; long receive gaps are preserved by re-anchoring to the reconnect packet time.",
                 },
-                "csv_columns": ["world_time", "sync_timestamp", "channel", "value_uV"],
+                "emg_csv_columns": ["world_time", "sync_timestamp", "packet_serial_number", "channel", "value_uV"],
+                "eeg_csv_columns": ["world_time", "sync_timestamp", "channel", "value_uV"],
             },
             "usb_cameras": usb_cameras,
             "d435i": {
