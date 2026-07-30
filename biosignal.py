@@ -307,6 +307,7 @@ class EmgEegUdpRecorder(QtCore.QObject):
         self._writer_files: Dict[str, object] = {}
         self._writer_objects: Dict[str, csv.writer] = {}
         self._writer_stop_event = threading.Event()
+        self._recording_modalities: set[str] = set()
         self._last_write_error = ""
         self._dropped_write_batches = 0
 
@@ -444,13 +445,26 @@ class EmgEegUdpRecorder(QtCore.QObject):
         self.listener_status_changed.emit("stopped")
         self._emit_device_statuses(force_offline=True)
 
-    def start_recording(self, session_dir: str, session_start_ts: float) -> Dict[str, str]:
+    def start_recording(
+        self,
+        session_dir: str,
+        session_start_ts: float,
+        enabled_modalities: Optional[Sequence[str]] = None,
+    ) -> Dict[str, str]:
         self.stop_recording()
         if self.writer_pending:
             raise RuntimeError("上一轮 EMG/EEG 数据仍在写入，暂时不能开始新采集")
+        modalities = {
+            str(modality).lower()
+            for modality in (enabled_modalities or self.CSV_HEADERS.keys())
+            if str(modality).lower() in self.CSV_HEADERS
+        }
+        if not modalities:
+            raise RuntimeError("未启用 EMG/EEG 保存通道")
         paths = {
-            "emg": os.path.join(session_dir, "emg.csv"),
-            "eeg": os.path.join(session_dir, "eeg.csv"),
+            modality: os.path.join(session_dir, f"{modality}.csv")
+            for modality in self.CSV_HEADERS
+            if modality in modalities
         }
         opened_files: Dict[str, object] = {}
         opened_writers: Dict[str, csv.writer] = {}
@@ -484,6 +498,7 @@ class EmgEegUdpRecorder(QtCore.QObject):
                 self._write_queue = write_queue
                 self._session_start_ts = session_start_ts
                 self._writer_thread = writer_thread
+                self._recording_modalities = set(modalities)
                 self._dropped_write_batches = 0
                 self._last_write_error = ""
                 self._recording = True
@@ -528,6 +543,7 @@ class EmgEegUdpRecorder(QtCore.QObject):
                 self._session_start_ts = None
                 self._writer_files = {}
                 self._writer_objects = {}
+                self._recording_modalities = set()
             write_error = self._last_write_error
         return not bool(write_error)
 
@@ -615,6 +631,8 @@ class EmgEegUdpRecorder(QtCore.QObject):
         fatal_queue_error = ""
         with self._recording_lock:
             if not self._recording or self._write_queue is None:
+                return
+            if batch.modality not in self._recording_modalities:
                 return
             session_start_ts = self._session_start_ts
             if session_start_ts is None or batch.packet_receive_time_s < session_start_ts:

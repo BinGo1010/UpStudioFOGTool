@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import socket
 import tempfile
@@ -82,6 +83,13 @@ def _all_biosignal_frames(parser: EmgEegPacketParser):
     return frames
 
 
+def _eeg_frames(parser: EmgEegPacketParser):
+    return [
+        _build_frame(parser, b"\xAD\xAD", "000003", zero_based_channel)
+        for zero_based_channel in range(3)
+    ]
+
+
 def _read_dict_rows(path: str):
     with open(path, newline="", encoding="utf-8") as file_obj:
         return list(csv.DictReader(file_obj))
@@ -156,6 +164,10 @@ class Page1BiosignalIntegrationTests(unittest.TestCase):
         for frame in _all_biosignal_frames(self.page.biosignal_recorder.parser):
             self.sender.sendto(frame, ("127.0.0.1", port))
 
+    def _send_eeg_channels(self, port: int):
+        for frame in _eeg_frames(self.page.biosignal_recorder.parser):
+            self.sender.sendto(frame, ("127.0.0.1", port))
+
     def _device_counts(self):
         recorder = self.page.biosignal_recorder
         with recorder._device_lock:
@@ -221,6 +233,24 @@ class Page1BiosignalIntegrationTests(unittest.TestCase):
         panel_labels = {label.text() for label in page.findChildren(QtWidgets.QLabel)}
         self.assertIn("子框 1 · 8 通道低频肌电（1000 Hz）", panel_labels)
         self.assertIn("子框 2 · 3 通道脑电（1000 Hz）", panel_labels)
+
+    def test_imu_subchannel_switches_drive_preflight_scope(self):
+        page = self.page
+        page.enable_imu_checkbox.setChecked(True)
+        page.enable_emg_checkbox.setChecked(False)
+        page.enable_eeg_checkbox.setChecked(False)
+        page.enable_usb_video_checkbox.setChecked(False)
+        page.enable_d435i_checkbox.setChecked(False)
+        page.enable_remote_label_checkbox.setChecked(False)
+        for imu_index, checkbox in page.imu_enable_checkboxes.items():
+            checkbox.setChecked(imu_index in (1, 3))
+        page.imu_recorder.online_imu_indices = Mock(return_value=[1, 3])
+
+        self.assertEqual(page._enabled_imu_indices(), [1, 3])
+        self.assertEqual(page._recording_preflight_errors(), [])
+
+        page.imu_recorder.online_imu_indices = Mock(return_value=[1])
+        self.assertEqual(page._recording_preflight_errors(), ["IMU 未全部在线：IMU3"])
 
     def test_real_udp_receiver_marks_three_serials_and_eleven_channels_online(self):
         port = self._start_real_listener()
@@ -354,6 +384,76 @@ class Page1BiosignalIntegrationTests(unittest.TestCase):
             self.assertTrue(
                 {"fog_start", "fog_end"}.issubset(sync_by_device.get("bluetooth_remote", set()))
             )
+
+    def test_modality_switches_allow_eeg_only_collection(self):
+        port = self._start_real_listener()
+        self._send_eeg_channels(port)
+        self._wait_for(
+            lambda: self.page.biosignal_recorder.online_serials() == {"000003"}
+            and {8, 9, 10}.issubset(self.page.biosignal_recorder.online_channel_indices()),
+            message="EEG device and channels did not become online",
+        )
+
+        page = self.page
+        page.enable_imu_checkbox.setChecked(False)
+        page.enable_emg_checkbox.setChecked(False)
+        page.enable_eeg_checkbox.setChecked(True)
+        page.enable_usb_video_checkbox.setChecked(False)
+        page.enable_d435i_checkbox.setChecked(False)
+        page.enable_remote_label_checkbox.setChecked(False)
+        page._start_capture_devices = Mock(name="start_capture_devices")
+        page.imu_recorder.start = Mock(name="imu_start")
+        page._start_camera_recording = Mock(name="camera_start_recording")
+        page.remote_connected = False
+
+        with tempfile.TemporaryDirectory() as output_root:
+            page.base_dir_input.setText(output_root)
+            page.name_input.setText("page1_eeg_only")
+            page.start_collection()
+
+            self.assertTrue(page.recording)
+            self.assertTrue(page.biosignal_recorder.recording)
+            page.imu_recorder.start.assert_not_called()
+            page._start_camera_recording.assert_not_called()
+            self.assertFalse(any(mock.called for mock in self.dialog_mocks))
+
+            time.sleep(0.05)
+            self._send_eeg_channels(port)
+            self._wait_for(
+                lambda: self._device_counts().get(2, 0) >= 6,
+                message="recording-period EEG packets were not accepted",
+            )
+
+            session_dir = page.session_dir
+            page.stop_collection()
+            self._wait_for(
+                lambda: not page.biosignal_recorder.writer_pending,
+                message="EEG-only CSV writer did not finish",
+            )
+
+            self.assertTrue(os.path.exists(os.path.join(session_dir, "eeg.csv")))
+            self.assertFalse(os.path.exists(os.path.join(session_dir, "emg.csv")))
+            self.assertFalse(os.path.exists(os.path.join(session_dir, "imu.csv")))
+            self.assertFalse(os.path.exists(os.path.join(session_dir, "remote_fog_events.csv")))
+
+            eeg_rows = _read_dict_rows(os.path.join(session_dir, "eeg.csv"))
+            sync_rows = _read_dict_rows(os.path.join(session_dir, "session_sync.csv"))
+            with open(os.path.join(session_dir, "session_metadata.json"), encoding="utf-8") as file_obj:
+                metadata = json.load(file_obj)
+
+        self.assertEqual({int(row["channel"]) for row in eeg_rows}, {1, 2, 3})
+        self.assertTrue(metadata["enabled_modalities"]["eeg"])
+        self.assertFalse(metadata["enabled_modalities"]["emg"])
+        self.assertFalse(metadata["enabled_modalities"]["wt_imu"])
+        self.assertEqual(metadata["biosignals"]["eeg"]["file"], "eeg.csv")
+        self.assertIsNone(metadata["biosignals"]["emg"]["file"])
+
+        sync_by_device = {}
+        for row in sync_rows:
+            sync_by_device.setdefault(row["device"], set()).add(row["event"])
+        self.assertIn("record_start_completed", sync_by_device.get("EEG 000003", set()))
+        self.assertIn("record_disabled", sync_by_device.get("EMG 000001", set()))
+        self.assertIn("record_disabled", sync_by_device.get("wt_imu", set()))
 
 
 if __name__ == "__main__":

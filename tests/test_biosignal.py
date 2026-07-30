@@ -196,6 +196,28 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(eeg_rows[0]["channel"], "1")
         self.assertAlmostEqual(float(emg_rows[-1]["sync_timestamp"]), 0.02, places=6)
 
+    def test_recording_can_be_limited_to_one_biosignal_modality(self):
+        recorder = EmgEegUdpRecorder()
+        emg_frame = build_frame(recorder.parser, b"\xAA\xAA", "000001", 1, [3000] * 10)
+        eeg_frame = build_frame(recorder.parser, b"\xAD\xAD", "000003", 0, [-3000] * 10)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recorder.start_recording(temp_dir, session_start_ts=100.0, enabled_modalities=["eeg"])
+            batches = recorder.process_datagram(
+                emg_frame + eeg_frame,
+                source=("10.0.0.1", 40000),
+                receive_time_s=100.02,
+            )
+            self.assertTrue(recorder.stop_recording())
+
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, "emg.csv")))
+            with open(os.path.join(temp_dir, "eeg.csv"), newline="", encoding="utf-8") as file_obj:
+                eeg_rows = list(csv.DictReader(file_obj))
+
+        self.assertEqual({batch.modality for batch in batches}, {"emg", "eeg"})
+        self.assertEqual(len(eeg_rows), 10)
+        self.assertEqual({row["channel"] for row in eeg_rows}, {"1"})
+
     def test_first_batch_is_cropped_at_session_start_without_negative_sync(self):
         recorder = EmgEegUdpRecorder()
         frame = build_frame(recorder.parser, b"\xAA\xAA", "000001", 1, [3000] * 10)
