@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "数据仍在保存",
-                "EMG/EEG 数据仍在落盘。程序会继续完成保存，请稍后再次关闭。",
+                "EMG/EEG 数据仍在落盘。程序会继续完成保存，请稍后再次关闭...。",
             )
             event.ignore()
             return
