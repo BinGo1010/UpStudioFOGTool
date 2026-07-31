@@ -1851,7 +1851,6 @@ class Page1Widget(QWidget):
         imu_layout.addWidget(self.imu_table)
         local_forward_label = QLabel(
             "控制算法实时流：UDP 127.0.0.1:15100"
-            "（逐包转发原始 WT 数据，不等待写盘）"
         )
         local_forward_label.setStyleSheet(
             "color: #137333; font-weight: 600; padding: 2px 4px;"
