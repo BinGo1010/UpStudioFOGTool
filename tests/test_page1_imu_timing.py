@@ -1,12 +1,54 @@
 import csv
 import os
+import socket
 import tempfile
+import time
 import unittest
 
 from page1 import WtMultiImuUdpRecorder
 
 
 class WtImuTimingTests(unittest.TestCase):
+    def test_imu_datagram_is_forwarded_to_local_control_port(self):
+        forward_receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        forward_receiver.bind(("127.0.0.1", 0))
+        forward_receiver.settimeout(1.0)
+        forward_port = int(forward_receiver.getsockname()[1])
+
+        port_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        port_probe.bind(("127.0.0.1", 0))
+        imu_port = int(port_probe.getsockname()[1])
+        port_probe.close()
+
+        recorder = WtMultiImuUdpRecorder(
+            local_forward_host="127.0.0.1",
+            local_forward_port=forward_port,
+        )
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        payload = b"WT-local-forward-test"
+        try:
+            recorder.start([imu_port])
+            deadline = time.monotonic() + 1.0
+            while imu_port not in recorder._port_sockets:
+                if time.monotonic() >= deadline:
+                    self.fail("IMU UDP listener did not start")
+                time.sleep(0.005)
+            sender.sendto(payload, ("127.0.0.1", imu_port))
+            forwarded, _address = forward_receiver.recvfrom(8192)
+        finally:
+            sender.close()
+            recorder.stop()
+            forward_receiver.close()
+
+        status = recorder.local_forward_status()
+        self.assertEqual(forwarded, payload)
+        self.assertEqual(status["host"], "127.0.0.1")
+        self.assertEqual(status["port"], forward_port)
+        self.assertEqual(status["payload"], "raw_wt_udp_datagram")
+        self.assertEqual(status["forwarded_packets"], 1)
+        self.assertEqual(status["dropped_packets"], 0)
+        self.assertIsNotNone(status["average_send_us"])
+
     def test_imu_sync_timestamp_uses_200hz_theoretical_period(self):
         recorder = WtMultiImuUdpRecorder()
 

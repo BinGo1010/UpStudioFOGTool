@@ -153,8 +153,17 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
     DEVICE_CLOCK_ROLLOVER_MS = 24 * 60 * 60 * 1000
     DEVICE_CLOCK_GLITCH_TOLERANCE_MS = 100.0
     UDP_PACKET_QUEUE_SIZE = 50000
+    LOCAL_FORWARD_HOST = "127.0.0.1"
+    LOCAL_FORWARD_PORT = 15100
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        local_forward_enabled: bool = True,
+        local_forward_host: str = LOCAL_FORWARD_HOST,
+        local_forward_port: int = LOCAL_FORWARD_PORT,
+    ):
         super().__init__(parent)
         self.running = False
         self._threads: List[threading.Thread] = []
@@ -185,6 +194,17 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         self._last_ui_emit_ts: Dict[int, float] = {}
         self._latest_sample_lock = threading.Lock()
         self._latest_samples: Dict[int, dict] = {}
+        self._local_forward_enabled = bool(local_forward_enabled)
+        self._local_forward_endpoint = (
+            str(local_forward_host),
+            int(local_forward_port),
+        )
+        self._local_forward_socket: Optional[socket.socket] = None
+        self._local_forward_stats_lock = threading.Lock()
+        self._local_forwarded_packets = 0
+        self._local_forward_dropped_packets = 0
+        self._local_forward_total_ns = 0
+        self._local_forward_last_epoch_s: Optional[float] = None
 
     def start(
         self,
@@ -209,10 +229,21 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         self._unknown_device_ids = set()
         self._unparsed_packet_counts = {}
         self._last_ui_emit_ts = {}
+        with self._local_forward_stats_lock:
+            self._local_forwarded_packets = 0
+            self._local_forward_dropped_packets = 0
+            self._local_forward_total_ns = 0
+            self._local_forward_last_epoch_s = None
         self._packet_queue = queue.Queue(maxsize=self.UDP_PACKET_QUEUE_SIZE)
         with self._latest_sample_lock:
             self._latest_samples = {}
         self.running = True
+        self._open_local_forward_socket()
+        if self._local_forward_socket is not None:
+            host, port = self._local_forward_endpoint
+            self.command_status.emit(
+                f"WT IMU 本机实时转发已启用：UDP {host}:{port}（原始 WT 数据包）"
+            )
 
         unique_ports = []
         for port in ports:
@@ -358,6 +389,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
 
     def stop(self):
         if not self.running:
+            self._close_local_forward_socket()
             return
 
         self.running = False
@@ -384,8 +416,95 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
         self._sockets.clear()
         self._port_sockets.clear()
         self._device_endpoints.clear()
+        self._close_local_forward_socket()
 
         self.stop_recording()
+
+    def configure_local_forwarding(
+        self,
+        *,
+        enabled: bool,
+        host: str = LOCAL_FORWARD_HOST,
+        port: int = LOCAL_FORWARD_PORT,
+    ):
+        """Configure the local raw-packet publisher before starting."""
+        if self.running:
+            raise RuntimeError("请先停止 IMU 接收，再修改本机转发配置")
+        port = int(port)
+        if not 1 <= port <= 65535:
+            raise ValueError("本机转发端口必须在 1 到 65535 之间")
+        self._close_local_forward_socket()
+        self._local_forward_enabled = bool(enabled)
+        self._local_forward_endpoint = (str(host), port)
+
+    def local_forward_status(self) -> dict:
+        with self._local_forward_stats_lock:
+            forwarded = self._local_forwarded_packets
+            dropped = self._local_forward_dropped_packets
+            total_ns = self._local_forward_total_ns
+            last_epoch_s = self._local_forward_last_epoch_s
+        return {
+            "enabled": self._local_forward_enabled,
+            "host": self._local_forward_endpoint[0],
+            "port": self._local_forward_endpoint[1],
+            "payload": "raw_wt_udp_datagram",
+            "forwarded_packets": forwarded,
+            "dropped_packets": dropped,
+            "average_send_us": (
+                total_ns / forwarded / 1000.0 if forwarded else None
+            ),
+            "last_forward_epoch_s": last_epoch_s,
+        }
+
+    def _open_local_forward_socket(self):
+        self._close_local_forward_socket()
+        if not self._local_forward_enabled:
+            return
+        try:
+            forward_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            forward_socket.setblocking(False)
+        except OSError as exc:
+            self.error_occurred.emit(
+                f"WT IMU 本机实时转发初始化失败，采集仍将继续：{exc}"
+            )
+            return
+        self._local_forward_socket = forward_socket
+
+    def _close_local_forward_socket(self):
+        forward_socket = self._local_forward_socket
+        self._local_forward_socket = None
+        if forward_socket is not None:
+            try:
+                forward_socket.close()
+            except OSError:
+                pass
+
+    def _forward_wt_datagram(self, data: bytes, recv_ts: float):
+        """Best-effort non-blocking loopback copy; never interrupts capture."""
+        forward_socket = self._local_forward_socket
+        if forward_socket is None:
+            return
+        started_ns = time.perf_counter_ns()
+        warning = ""
+        try:
+            forward_socket.sendto(data, self._local_forward_endpoint)
+        except (BlockingIOError, InterruptedError, OSError) as exc:
+            with self._local_forward_stats_lock:
+                self._local_forward_dropped_packets += 1
+                dropped = self._local_forward_dropped_packets
+            if dropped in (1, 10, 100, 1000) or dropped % 10000 == 0:
+                warning = (
+                    "WT IMU 本机实时转发丢包="
+                    f"{dropped}，采集不受影响：{exc}"
+                )
+        else:
+            elapsed_ns = time.perf_counter_ns() - started_ns
+            with self._local_forward_stats_lock:
+                self._local_forwarded_packets += 1
+                self._local_forward_total_ns += elapsed_ns
+                self._local_forward_last_epoch_s = float(recv_ts)
+        if warning:
+            self.error_occurred.emit(warning)
 
     def _receive_loop(self, port: int):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -418,6 +537,7 @@ class WtMultiImuUdpRecorder(QtCore.QObject):
             try:
                 data, addr = sock.recvfrom(8192)
                 recv_ts = time.time()
+                self._forward_wt_datagram(data, recv_ts)
                 raw_count = self._raw_packet_counts.get(port, 0) + 1
                 self._raw_packet_counts[port] = raw_count
                 try:
@@ -1729,6 +1849,18 @@ class Page1Widget(QWidget):
                     item.setForeground(QtGui.QColor("#666666"))
                 self.imu_table.setItem(idx, col, item)
         imu_layout.addWidget(self.imu_table)
+        local_forward_label = QLabel(
+            "控制算法实时流：UDP 127.0.0.1:15100"
+            "（逐包转发原始 WT 数据，不等待写盘）"
+        )
+        local_forward_label.setStyleSheet(
+            "color: #137333; font-weight: 600; padding: 2px 4px;"
+        )
+        local_forward_label.setToolTip(
+            "独立控制算法监听 127.0.0.1:15100 即可；"
+            "该转发为非阻塞尽力发送，不会因订阅程序未启动而阻塞采集。"
+        )
+        imu_layout.addWidget(local_forward_label)
         imu_tab_layout.addWidget(imu_group)
         data_tabs.addTab(imu_tab, "IMU")
 
@@ -3852,6 +3984,7 @@ class Page1Widget(QWidget):
                 "label": label,
                 "file": f"camera{idx + 1}.mp4" if channel_enabled and camera is not None else None,
             })
+        local_forward_status = self.imu_recorder.local_forward_status()
         metadata = {
             "subject": subject,
             "task_type": self.task_type_combo.currentText(),
@@ -3880,6 +4013,14 @@ class Page1Widget(QWidget):
                 "enabled_indices": enabled_imu_indices,
                 "file": "imu.csv" if imu_enabled and enabled_imu_indices else None,
                 "ports": ports if imu_enabled else [],
+                "local_realtime_forward": {
+                    "enabled": local_forward_status["enabled"],
+                    "transport": "UDP loopback",
+                    "host": local_forward_status["host"],
+                    "port": local_forward_status["port"],
+                    "payload": "Exact raw WT UDP datagram received by the acquisition program.",
+                    "delivery": "Best effort and non-blocking; a slow or absent subscriber never blocks acquisition.",
+                },
                 "device_ids": WtMultiImuUdpRecorder.DEVICE_IDS,
                 "enabled_device_ids": {
                     index: WtMultiImuUdpRecorder.DEVICE_IDS[index]

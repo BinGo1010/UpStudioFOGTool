@@ -1,0 +1,46 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "运行全部单元测试",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": [
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "tests",
+                "-v"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "构建 UpStudioFOGTool.exe",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\build_exe.ps1"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "VIRTUAL_ENV": "${workspaceFolder}\\.venv",
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "problemMatcher": []
+        }
+    ]
+}
